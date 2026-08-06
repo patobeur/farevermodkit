@@ -1,0 +1,9 @@
+{
+  "overlay": {
+    "enabled": true,
+    "stage": 4,
+    "startupDelayMs": 20000
+  },
+  "memoryEnabled": true,
+  "memoryAllowScan": false
+}

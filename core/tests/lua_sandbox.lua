@@ -1,0 +1,7 @@
+assert(os == nil, "os must be unavailable")
+assert(io == nil, "io must be unavailable")
+assert(debug == nil, "debug must be unavailable")
+assert(package == nil, "package must be unavailable")
+assert(require == nil, "require must be unavailable")
+assert(i18n("message") == "message", "i18n fallback must return its key")
+imgui.text("Bravo !")

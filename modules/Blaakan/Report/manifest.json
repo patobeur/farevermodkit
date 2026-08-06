@@ -1,0 +1,10 @@
+{
+  "id": "blaakan.report",
+  "author": "Blaakan",
+  "name": "Report",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "entry": "main.lua",
+  "defaultLanguage": "en-US",
+  "enabledByDefault": false
+}

@@ -1,0 +1,10 @@
+{
+  "memory_unvalidated": "Lecture mémoire en attente d’un build Farever validé.",
+  "memory_unavailable": "La mémoire est validée mais aucun personnage n’est disponible.",
+  "player_unavailable": "Les données du personnage sont temporairement indisponibles.",
+  "player": "Personnage",
+  "level": "Niveau",
+  "class": "Classe",
+  "inventory": "Inventaire (sacs / banque / équipé)",
+  "settings": "Options de l’inventaire"
+}

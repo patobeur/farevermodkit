@@ -1,0 +1,515 @@
+// ---------------------------------------------------------------------------
+// input.cpp
+//
+// The subclass runs on the game's window thread; the UI reads on the render
+// thread. Every shared field is a LONG accessed with interlocked ops - no
+// locks in a WndProc.
+//
+// Swallowing policy: while the UI is visible, mouse presses/wheel inside the
+// UI rectangle are consumed, and a press that started inside keeps the whole
+// drag (moves + release) until the button goes up - the window takes mouse
+// capture for that stretch so the release is seen even outside the window.
+// Swallowed presses latch, so their release/double-click halves never leak
+// to the game on their own. The toggle key and Escape (only while visible)
+// are the only keys touched; WASD etc. keep working with the atlas open.
+//
+// Liveness: the UI republishes its rectangle every drawn frame. If the
+// overlay goes dormant (device loss, swap-chain recreation), the rect goes
+// stale; a stale rect stops all swallowing, so a dead overlay can never
+// leave an invisible input dead zone in the middle of the screen.
+// ---------------------------------------------------------------------------
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <windowsx.h>
+
+#include "input.h"
+
+namespace fmk {
+
+void host_log(const char* fmt, ...);
+
+namespace {
+
+constexpr UINT kToggleKey = 0;
+constexpr UINT kWaypointKey = 0;
+constexpr UINT kSkipKey = 0;
+constexpr DWORD kRectFreshMs = 3000;
+
+HWND    g_hwnd = nullptr;
+WNDPROC g_orig = nullptr;
+
+volatile LONG g_mouse_x = 0, g_mouse_y = 0;
+volatile LONG g_lbutton = 0;        // press started inside the UI, still held
+volatile LONG g_clicks = 0;
+volatile LONG g_click_x = 0, g_click_y = 0;
+volatile LONG g_click_mods = 0;      // MK_SHIFT / MK_CONTROL at press time
+volatile LONG g_wheel_raw = 0;      // accumulated wheel delta (not detents)
+volatile LONG g_visible = 0;
+volatile LONG g_rect[4] = {0, 0, 0, 0};   // x, y, w, h
+// One per mod with a movable frame: [0] the navigator's pill, [1] the loot
+// feed. Unclaimed slots stay zero, and a zero-sized rect swallows nothing.
+volatile LONG g_aux[kAuxRects][4] = {};
+volatile LONG g_rect_tick = 0;            // GetTickCount of the last publish
+
+// The one rectangle that claims something while the host's own window is
+// shut. See input.h for why the wheel in particular is safe to take there.
+volatile LONG g_wheel_rect[4] = {0, 0, 0, 0};
+
+// Typed text, as a single-producer single-consumer ring: the window thread
+// writes, the render thread drains. No lock in the WndProc, which is the
+// rule the rest of this file follows.
+constexpr int kTextRing = 128;
+char g_text[kTextRing];
+volatile LONG g_text_head = 0;   // written by the window thread
+volatile LONG g_text_tail = 0;   // written by the render thread
+volatile LONG g_capture = 0;
+volatile LONG g_waypoint_presses = 0;
+volatile LONG g_skip_presses = 0;
+volatile LONG g_clear_presses = 0;
+
+// Left-clicks that pass through to the game, counted but never taken. The
+// press is remembered and the counter only advances on release, because a
+// press is not yet a click: the game's map pans with the same button, and
+// treating the start of a pan as a click would drop a waypoint every time
+// the player moved the map. A click is a release near where the press
+// landed, soon after it.
+volatile LONG g_raw_down = 0;
+volatile LONG g_raw_down_x = 0, g_raw_down_y = 0;
+volatile LONG g_raw_down_tick = 0;
+volatile LONG g_raw_down_mods = 0;
+volatile LONG g_raw_clicks = 0;
+volatile LONG g_raw_x = 0, g_raw_y = 0;
+volatile LONG g_raw_mods = 0;
+constexpr LONG kClickSlopPx = 6;
+constexpr DWORD kClickMs = 500;
+
+// Latches so the second half of a swallowed press/key never leaks.
+volatile LONG g_rbtn_held = 0;
+volatile LONG g_mbtn_held = 0;
+volatile LONG g_xbtn_held = 0;
+volatile LONG g_esc_held = 0;
+
+bool in_rect(const volatile LONG* r, int x, int y) {
+    const LONG rx = r[0], ry = r[1], rw = r[2], rh = r[3];
+    return rw > 0 && rh > 0 && x >= rx && y >= ry && x < rx + rw && y < ry + rh;
+}
+
+bool in_ui_rect(int x, int y) {
+    if (in_rect(g_rect, x, y)) return true;
+    for (int i = 0; i < kAuxRects; i++)
+        if (in_rect(g_aux[i], x, y)) return true;
+    return false;
+}
+
+// Visible AND the render thread is actually drawing the window. The rect is
+// republished every drawn frame, so a stale tick means the overlay stopped.
+bool ui_active() {
+    if (!InterlockedCompareExchange(&g_visible, 0, 0)) return false;
+    const DWORD tick = (DWORD)InterlockedCompareExchange(&g_rect_tick, 0, 0);
+    return (GetTickCount() - tick) < kRectFreshMs;
+}
+
+// Whole detents out of the shared accumulator, with the fractional remainder
+// put back so a precision touchpad's small movements still add up to a step.
+// Every consumer goes through here: two of them rounding separately would
+// each throw away part of the same scroll.
+int take_wheel_detents() {
+    const LONG raw = InterlockedExchange(&g_wheel_raw, 0);
+    const LONG rem = raw % WHEEL_DELTA;
+    if (rem) InterlockedAdd(&g_wheel_raw, rem);
+    return (int)(raw / WHEEL_DELTA);
+}
+
+void clear_held_buttons() {
+    InterlockedExchange(&g_lbutton, 0);
+    InterlockedExchange(&g_rbtn_held, 0);
+    InterlockedExchange(&g_mbtn_held, 0);
+    InterlockedExchange(&g_xbtn_held, 0);
+    // The release will never arrive, so the press must not survive to be
+    // paired with an unrelated one later.
+    InterlockedExchange(&g_raw_down, 0);
+}
+
+// F10, from whichever message carried it. Shift decides which of the two
+// counters moves, read here rather than when the count is consumed - by then
+// the key is long back up.
+void note_skip_key(LPARAM lp) {
+    if (lp & (1 << 30)) return;                              // autorepeat
+    if (InterlockedCompareExchange(&g_capture, 0, 0)) return;  // typing
+    if (GetKeyState(VK_SHIFT) & 0x8000)
+        InterlockedIncrement(&g_clear_presses);
+    else
+        InterlockedIncrement(&g_skip_presses);
+}
+
+LRESULT CALLBACK hook_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    const bool active = ui_active();
+
+    switch (msg) {
+        case WM_KEYDOWN:
+            if (wp == kToggleKey && !(lp & (1 << 30))) {   // ignore autorepeat
+                InterlockedXor(&g_visible, 1);
+                InterlockedExchange(&g_capture, 0);
+                return 0;
+            }
+            // Held down, F9 would carpet the route with waypoints, so it
+            // counts presses and not repeats. It is swallowed either way,
+            // which keeps the game from also acting on it.
+            if (wp == kWaypointKey) {
+                if (!(lp & (1 << 30)) &&
+                    !InterlockedCompareExchange(&g_capture, 0, 0))
+                    InterlockedIncrement(&g_waypoint_presses);
+                return 0;
+            }
+            if (wp == kSkipKey) {
+                note_skip_key(lp);
+                return 0;
+            }
+            if (wp == VK_ESCAPE && active) {
+                // With a text field focused, Escape leaves the field rather
+                // than closing the window - the usual expectation.
+                if (InterlockedExchange(&g_capture, 0)) {
+                    InterlockedExchange(&g_esc_held, 1);
+                    return 0;
+                }
+                InterlockedExchange(&g_visible, 0);
+                InterlockedExchange(&g_esc_held, 1);
+                return 0;
+            }
+            // Typing into a field: swallow the keys so they neither move the
+            // character nor open the game's own windows. Everything else
+            // still reaches the game, which is why capture is opt-in.
+            if (active && InterlockedCompareExchange(&g_capture, 0, 0)) {
+                if (wp == VK_BACK || wp == VK_RETURN || wp == VK_SPACE ||
+                    (wp >= '0' && wp <= 'Z') || (wp >= VK_NUMPAD0 && wp <= VK_DIVIDE) ||
+                    (wp >= VK_OEM_1 && wp <= VK_OEM_102))
+                    return 0;
+            }
+            break;
+
+        // **F10 pressed alone arrives here, not as WM_KEYDOWN**: Windows
+        // treats it as the menu-activation key. Only F10 is intercepted -
+        // everything else, Alt+F4 and Alt+Tab included, falls through to the
+        // game and to DefWindowProc untouched.
+        case WM_SYSKEYDOWN:
+            if (wp == kSkipKey) {
+                note_skip_key(lp);
+                return 0;
+            }
+            break;
+
+        case WM_SYSKEYUP:
+            if (wp == kSkipKey) return 0;
+            break;
+
+        case WM_KEYUP:
+            if (wp == kToggleKey || wp == kWaypointKey || wp == kSkipKey)
+                return 0;
+            if (wp == VK_ESCAPE && InterlockedExchange(&g_esc_held, 0)) return 0;
+            if (active && InterlockedCompareExchange(&g_capture, 0, 0)) {
+                if (wp == VK_BACK || wp == VK_RETURN || wp == VK_SPACE ||
+                    (wp >= '0' && wp <= 'Z') || (wp >= VK_NUMPAD0 && wp <= VK_DIVIDE) ||
+                    (wp >= VK_OEM_1 && wp <= VK_OEM_102))
+                    return 0;
+            }
+            break;
+
+        // The character itself, already keyboard-layout translated - the
+        // only correct source for typed text.
+        case WM_CHAR: {
+            if (!active || !InterlockedCompareExchange(&g_capture, 0, 0)) break;
+            const wchar_t ch = (wchar_t)wp;
+            if (ch == '\b' || ch == '\r' || (ch >= 0x20 && ch < 0x7f)) {
+                const LONG head = InterlockedCompareExchange(&g_text_head, 0, 0);
+                const LONG tail = InterlockedCompareExchange(&g_text_tail, 0, 0);
+                if (((head + 1) % kTextRing) != tail) {   // drop when full
+                    g_text[head] = ch == '\r' ? '\n' : (char)ch;
+                    InterlockedExchange(&g_text_head, (head + 1) % kTextRing);
+                }
+            }
+            return 0;
+        }
+
+        case WM_MOUSEMOVE: {
+            const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            InterlockedExchange(&g_mouse_x, x);
+            InterlockedExchange(&g_mouse_y, y);
+            if (active && (g_lbutton || in_ui_rect(x, y)))
+                return 0;
+            break;
+        }
+
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDBLCLK: {
+            const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+            InterlockedExchange(&g_mouse_x, x);
+            InterlockedExchange(&g_mouse_y, y);
+            if (active && in_ui_rect(x, y)) {
+                InterlockedExchange(&g_click_x, x);
+                InterlockedExchange(&g_click_y, y);
+                InterlockedExchange(&g_click_mods,
+                                    (LONG)(wp & (MK_SHIFT | MK_CONTROL)));
+                InterlockedExchange(&g_lbutton, 1);
+                InterlockedIncrement(&g_clicks);
+                // Capture keeps the release visible even when it lands
+                // outside the window (title-bar drags routinely do).
+                SetCapture(hwnd);
+                return 0;
+            }
+            // Not ours. Remember it so the release can decide whether it was
+            // a click, and let the message through untouched.
+            InterlockedExchange(&g_raw_down, 1);
+            InterlockedExchange(&g_raw_down_x, x);
+            InterlockedExchange(&g_raw_down_y, y);
+            InterlockedExchange(&g_raw_down_tick, (LONG)GetTickCount());
+            // Modifiers are recorded now, not when the click is read: the
+            // poll can be 50ms behind, by which time shift may be back up.
+            InterlockedExchange(&g_raw_down_mods,
+                                (LONG)(wp & (MK_SHIFT | MK_CONTROL)));
+            break;
+        }
+
+        case WM_LBUTTONUP:
+            if (InterlockedExchange(&g_lbutton, 0)) {
+                if (GetCapture() == hwnd) ReleaseCapture();
+                return 0;
+            }
+            if (InterlockedExchange(&g_raw_down, 0)) {
+                const int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+                const LONG dx = x - InterlockedCompareExchange(&g_raw_down_x, 0, 0);
+                const LONG dy = y - InterlockedCompareExchange(&g_raw_down_y, 0, 0);
+                const DWORD held =
+                    GetTickCount() -
+                    (DWORD)InterlockedCompareExchange(&g_raw_down_tick, 0, 0);
+                if (dx <= kClickSlopPx && dx >= -kClickSlopPx &&
+                    dy <= kClickSlopPx && dy >= -kClickSlopPx &&
+                    held < kClickMs) {
+                    InterlockedExchange(&g_raw_x, x);
+                    InterlockedExchange(&g_raw_y, y);
+                    InterlockedExchange(
+                        &g_raw_mods,
+                        InterlockedCompareExchange(&g_raw_down_mods, 0, 0));
+                    InterlockedIncrement(&g_raw_clicks);
+                }
+            }
+            break;
+
+        // Losing capture or focus mid-drag: the release will never arrive,
+        // so drop every held-button latch instead of swallowing forever.
+        case WM_CAPTURECHANGED:
+        case WM_CANCELMODE:
+        case WM_KILLFOCUS:
+            clear_held_buttons();
+            break;
+
+        case WM_MOUSEWHEEL: {
+            // Wheel coordinates are screen, not client.
+            POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            ScreenToClient(hwnd, &pt);
+            // With the window open, the ordinary rule. With it shut, the one
+            // exception: a frame that published a wheel rectangle. The two
+            // are mutually exclusive on purpose - the atlas window draws over
+            // these frames, so while it is up the wheel belongs to whatever
+            // the player can actually see.
+            if ((active && in_ui_rect(pt.x, pt.y)) ||
+                (!active && in_rect(g_wheel_rect, pt.x, pt.y))) {
+                // Raw delta, not detents: precision touchpads send fractions
+                // of WHEEL_DELTA and truncating them here would eat them.
+                InterlockedAdd(&g_wheel_raw, GET_WHEEL_DELTA_WPARAM(wp));
+                return 0;
+            }
+            break;
+        }
+
+        // Other buttons get no UI meaning, but a press over the open window
+        // must not walk or attack underneath it - and once the press is
+        // swallowed, its release must be too, wherever it lands.
+        case WM_RBUTTONDOWN:
+        case WM_RBUTTONDBLCLK: {
+            if (active && in_ui_rect(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {
+                InterlockedExchange(&g_rbtn_held, 1);
+                return 0;
+            }
+            break;
+        }
+        case WM_RBUTTONUP:
+            if (InterlockedExchange(&g_rbtn_held, 0)) return 0;
+            break;
+
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONDBLCLK: {
+            if (active && in_ui_rect(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {
+                InterlockedExchange(&g_mbtn_held, 1);
+                return 0;
+            }
+            break;
+        }
+        case WM_MBUTTONUP:
+            if (InterlockedExchange(&g_mbtn_held, 0)) return 0;
+            break;
+
+        case WM_XBUTTONDOWN:
+        case WM_XBUTTONDBLCLK: {
+            if (active && in_ui_rect(GET_X_LPARAM(lp), GET_Y_LPARAM(lp))) {
+                InterlockedExchange(&g_xbtn_held, 1);
+                return TRUE;
+            }
+            break;
+        }
+        case WM_XBUTTONUP:
+            if (InterlockedExchange(&g_xbtn_held, 0)) return TRUE;
+            break;
+    }
+
+    const WNDPROC orig = g_orig;
+    if (!orig) return DefWindowProcW(hwnd, msg, wp, lp);
+    return CallWindowProcW(orig, hwnd, msg, wp, lp);
+}
+
+}  // namespace
+
+bool input_install(void* hwnd) {
+    if (g_hwnd) return true;
+    HWND h = (HWND)hwnd;
+    if (!h || !IsWindow(h)) return false;
+    // g_orig must be valid BEFORE the hook goes live: the window thread can
+    // enter hook_proc the instant SetWindowLongPtr swaps the pointer, and it
+    // must never chain into null.
+    WNDPROC prev = (WNDPROC)GetWindowLongPtrW(h, GWLP_WNDPROC);
+    if (!prev) {
+        host_log("input: GetWindowLongPtr failed (%lu)", GetLastError());
+        return false;
+    }
+    g_orig = prev;
+    WNDPROC swapped = (WNDPROC)SetWindowLongPtrW(h, GWLP_WNDPROC,
+                                                 (LONG_PTR)&hook_proc);
+    if (!swapped) {
+        g_orig = nullptr;
+        host_log("input: SetWindowLongPtr failed (%lu)", GetLastError());
+        return false;
+    }
+    // If another hook slid in between the two calls, chain to what we
+    // actually displaced.
+    if (swapped != prev) g_orig = swapped;
+    g_hwnd = h;
+    host_log("input: WndProc hooked on %p", hwnd);
+    return true;
+}
+
+void input_uninstall() {
+    if (!g_hwnd) return;
+    // Only restore if we are still the current proc; if something hooked
+    // after us, restoring would unhook them too.
+    if ((WNDPROC)GetWindowLongPtrW(g_hwnd, GWLP_WNDPROC) == &hook_proc)
+        SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)g_orig);
+    g_hwnd = nullptr;
+    // g_orig stays set: the window thread may still be inside hook_proc.
+}
+
+void input_peek(InputState* out) {
+    // Counter before payload, mirroring the writer's payload-then-counter
+    // order: a click that lands mid-snapshot is seen next frame with its
+    // payload complete, never this frame with the payload missing.
+    out->clicks  = InterlockedCompareExchange(&g_clicks, 0, 0);
+    out->click_x = InterlockedCompareExchange(&g_click_x, 0, 0);
+    out->click_y = InterlockedCompareExchange(&g_click_y, 0, 0);
+    const LONG cmods = InterlockedCompareExchange(&g_click_mods, 0, 0);
+    out->click_shift = (cmods & MK_SHIFT) != 0;
+    out->click_ctrl = (cmods & MK_CONTROL) != 0;
+    out->lbutton = InterlockedCompareExchange(&g_lbutton, 0, 0) != 0;
+    out->mouse_x = InterlockedCompareExchange(&g_mouse_x, 0, 0);
+    out->mouse_y = InterlockedCompareExchange(&g_mouse_y, 0, 0);
+    out->wheel = 0;
+    out->visible = InterlockedCompareExchange(&g_visible, 0, 0) != 0;
+}
+
+void input_get(InputState* out) {
+    input_peek(out);
+    out->wheel = take_wheel_detents();
+}
+
+int input_take_wheel_in(int x, int y, int w, int h) {
+    // The cursor position the WndProc last stamped, not a fresh cursor query:
+    // it is the same one the frame is being drawn against, and the swallowing
+    // decision that let this delta accumulate was made from it too.
+    const int mx = (int)InterlockedCompareExchange(&g_mouse_x, 0, 0);
+    const int my = (int)InterlockedCompareExchange(&g_mouse_y, 0, 0);
+    if (!(w > 0 && h > 0 && mx >= x && my >= y && mx < x + w && my < y + h))
+        return 0;
+    return take_wheel_detents();
+}
+
+void input_set_wheel_rect(int x, int y, int w, int h) {
+    InterlockedExchange(&g_wheel_rect[0], x);
+    InterlockedExchange(&g_wheel_rect[1], y);
+    InterlockedExchange(&g_wheel_rect[2], w);
+    InterlockedExchange(&g_wheel_rect[3], h);
+}
+
+void input_set_visible(bool v) {
+    InterlockedExchange(&g_visible, v ? 1 : 0);
+    if (!v) InterlockedExchange(&g_capture, 0);
+}
+
+int input_take_waypoint_presses() {
+    return (int)InterlockedExchange(&g_waypoint_presses, 0);
+}
+
+int input_take_skip_presses() {
+    return (int)InterlockedExchange(&g_skip_presses, 0);
+}
+
+int input_take_clear_presses() {
+    return (int)InterlockedExchange(&g_clear_presses, 0);
+}
+
+void input_peek_raw_click(RawClick* out) {
+    if (!out) return;
+    out->count = (int)InterlockedCompareExchange(&g_raw_clicks, 0, 0);
+    out->x = (int)InterlockedCompareExchange(&g_raw_x, 0, 0);
+    out->y = (int)InterlockedCompareExchange(&g_raw_y, 0, 0);
+    const LONG mods = InterlockedCompareExchange(&g_raw_mods, 0, 0);
+    out->shift = (mods & MK_SHIFT) != 0;
+    out->ctrl = (mods & MK_CONTROL) != 0;
+}
+
+void input_set_text_capture(bool on) {
+    InterlockedExchange(&g_capture, on ? 1 : 0);
+}
+
+bool input_text_capture() {
+    return InterlockedCompareExchange(&g_capture, 0, 0) != 0;
+}
+
+int input_take_text(char* out, int max_len) {
+    int n = 0;
+    LONG tail = InterlockedCompareExchange(&g_text_tail, 0, 0);
+    const LONG head = InterlockedCompareExchange(&g_text_head, 0, 0);
+    while (tail != head && n < max_len) {
+        out[n++] = g_text[tail];
+        tail = (tail + 1) % kTextRing;
+    }
+    InterlockedExchange(&g_text_tail, tail);
+    return n;
+}
+
+void input_set_ui_rect(int x, int y, int w, int h) {
+    InterlockedExchange(&g_rect[0], x);
+    InterlockedExchange(&g_rect[1], y);
+    InterlockedExchange(&g_rect[2], w);
+    InterlockedExchange(&g_rect[3], h);
+    InterlockedExchange(&g_rect_tick, (LONG)GetTickCount());
+}
+
+bool input_in_main_rect(int x, int y) { return in_rect(g_rect, x, y); }
+
+void input_set_aux_rect(int slot, int x, int y, int w, int h) {
+    if (slot < 0 || slot >= kAuxRects) return;
+    InterlockedExchange(&g_aux[slot][0], x);
+    InterlockedExchange(&g_aux[slot][1], y);
+    InterlockedExchange(&g_aux[slot][2], w);
+    InterlockedExchange(&g_aux[slot][3], h);
+}
+
+}  // namespace fmk

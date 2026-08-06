@@ -1,0 +1,9 @@
+{
+    "version":  "5.4.8",
+    "architecture":  "x64",
+    "dll":  "third_party/lua/bin/lua54.dll",
+    "sha256":  "cf364b9cd60e3fa342c441f8552ae287f23832a47ac324ec3ffdc24b6f00a380",
+    "source":  "https://www.lua.org/ftp/lua-5.4.8.tar.gz",
+    "sourceSha256":  "4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae",
+    "license":  "MIT"
+}

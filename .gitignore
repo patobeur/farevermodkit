@@ -1,0 +1,35 @@
+# Builds and packages
+**/build/
+native/test-package/
+third_party/lua/bin/
+
+# Runtime and local state
+logs/
+backups/
+updates/
+*.log
+*.tmp
+farever-modkit.ini
+farevermodkit-ui.json
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+
+# Debug output
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+# Generated from the player's Farever installation
+assets/atlas/farever-atlas-icons.dds
+assets/atlas/farever-atlas-icons.png
+tools/out/

@@ -1,0 +1,12 @@
+{
+  "id": "patobeur.console",
+  "author": "Patobeur",
+  "name": "Console",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "entry": "main.lua",
+  "defaultLanguage": "fr-FR",
+  "languages": ["fr-FR"],
+  "enabledByDefault": false,
+  "requiresGameWorld": false
+}

@@ -1,0 +1,10 @@
+{
+  "memory_unvalidated": "Memory API waiting for a validated Farever build.",
+  "memory_unavailable": "Memory is validated but no character is available.",
+  "player_unavailable": "Character data is temporarily unavailable.",
+  "player": "Character",
+  "level": "Level",
+  "class": "Class",
+  "inventory": "Inventory (bags / bank / equipped)",
+  "settings": "Inventory settings"
+}

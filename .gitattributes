@@ -1,0 +1,17 @@
+* text=auto
+*.cpp text eol=lf
+*.h text eol=lf
+*.lua text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.cmd text eol=crlf
+*.png binary
+*.dds binary
+*.dll binary
+*.tar.gz binary
+.gitattributes text eol=lf
+.gitignore text eol=lf
+LICENSE text eol=lf
+*.mjs text eol=lf
+*.tsv text eol=lf
+third_party/lua/lua-5.4.8/** -text

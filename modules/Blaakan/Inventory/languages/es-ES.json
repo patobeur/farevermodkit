@@ -1,0 +1,10 @@
+{
+  "memory_unvalidated": "La API de memoria espera una versión validada de Farever.",
+  "memory_unavailable": "La memoria está validada pero no hay personaje disponible.",
+  "player_unavailable": "Los datos del personaje no están disponibles temporalmente.",
+  "player": "Personaje",
+  "level": "Nivel",
+  "class": "Clase",
+  "inventory": "Inventario (bolsas / banco / equipado)",
+  "settings": "Opciones del inventario"
+}

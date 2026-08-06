@@ -10,7 +10,9 @@ Le prototype est fonctionnel sur le build Farever pris en charge. Il propose :
 
 - une icône FMK toujours visible et une fenêtre de gestion déplaçable ;
 - activation et désactivation persistantes des modules ;
-- icônes et fenêtres de modules déplaçables ;
+- icônes et fenêtres de modules déplaçables, redimensionnables et persistantes ;
+- verrouillage des icônes et réinitialisation séparée des icônes et fenêtres ;
+- mode capture avec `F2`, qui masque puis restaure toute l’interface FMK sans bloquer la touche du jeu ;
 - Collection Atlas de Blaakan ;
 - BossRun, Console et Report de Patobeur ;
 - sandbox Lua avec budget d’instructions ;
@@ -65,7 +67,7 @@ Le code et les ressources sont installés dans le dossier du jeu. Les données p
 %LOCALAPPDATA%\farevermodkit\data\accounts\...
 ```
 
-L’état de l’interface, les positions Atlas/Navigator et les réglages BossRun sont maintenant centralisés sous `%LOCALAPPDATA%\farevermodkit`. Les anciens fichiers sont importés une fois lorsqu’ils existent.
+L’état de l’interface, les positions Atlas/Navigator, les réglages BossRun et les exports Report sont centralisés sous `%LOCALAPPDATA%\farevermodkit`. Les anciens fichiers sont importés une fois lorsqu’ils existent.
 
 ## Sécurité
 

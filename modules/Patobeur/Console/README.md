@@ -18,6 +18,6 @@ FMK ne distingue pas encore avec certitude l'écran titre de l'écran de sélect
 
 ## Fenêtre
 
-La fenêtre est déplaçable. Elle conserve au maximum 250 lignes et en montre 17 à la fois. La molette fait défiler l'historique lorsque le pointeur se trouve au-dessus de la zone noire. Le compteur du bandeau indique la plage visible et le nombre total d'événements.
+La fenêtre est déplaçable et redimensionnable. Elle conserve au maximum 250 lignes ; le nombre de lignes visibles dépend de sa hauteur. La molette fait défiler l'historique lorsque le pointeur se trouve au-dessus de la zone noire. Le compteur du bandeau indique la plage visible et le nombre total d'événements sans recouvrir le bouton de fermeture.
 
 Les événements sont gardés en mémoire pendant la session. Une éventuelle exportation sur disque sera ajoutée séparément, sous `%LOCALAPPDATA%\farevermodkit`, afin de ne pas confondre une console de diagnostic avec les journaux natifs permanents.

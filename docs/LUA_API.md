@@ -55,3 +55,6 @@ Cette API spécialisée écrit sous `%LOCALAPPDATA%\farevermodkit`, par compte p
 ## Manifestes
 
 Les champs actuellement utilisés sont `id`, `author`, `name`, `version`, `apiVersion`, `entry`, `defaultLanguage`, `languages`, `enabledByDefault` et `requiresGameWorld`.
+## Export Report
+
+`farever.report_generate()` demande au worker mémoire de sauvegarder les données du personnage courant et de régénérer le rapport HTML local. La fonction renvoie `true` lorsque la demande a été acceptée. Lua ne reçoit aucun accès au système de fichiers.

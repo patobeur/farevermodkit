@@ -12,7 +12,7 @@ Le prototype est fonctionnel sur le build Farever pris en charge. Il propose :
 - activation et désactivation persistantes des modules ;
 - icônes et fenêtres de modules déplaçables ;
 - Collection Atlas de Blaakan ;
-- BossRun et Console de Patobeur ;
+- BossRun, Console et Report de Patobeur ;
 - sandbox Lua avec budget d’instructions ;
 - lecture mémoire en worker, sans scan global de secours ;
 - refus des lectures si le hash du build n’est pas reconnu.
@@ -65,7 +65,7 @@ Le code et les ressources sont installés dans le dossier du jeu. Les données p
 %LOCALAPPDATA%\farevermodkit\data\accounts\...
 ```
 
-L’état de l’interface FMK est encore conservé par l’installation actuelle du jeu. Sa migration complète vers `%LOCALAPPDATA%\farevermodkit` reste prévue.
+L’état de l’interface, les positions Atlas/Navigator et les réglages BossRun sont maintenant centralisés sous `%LOCALAPPDATA%\farevermodkit`. Les anciens fichiers sont importés une fois lorsqu’ils existent.
 
 ## Sécurité
 
@@ -78,6 +78,7 @@ Les offsets mémoire appartiennent au cœur. Un build inconnu doit être refusé
 - [API Lua](docs/LUA_API.md)
 - [Cœur natif](native/README.md)
 - [Lecture mémoire](core/src/memory/README.md)
+- [Stockage et migration](docs/STORAGE.md)
 - [Historique de développement](docs/DEVELOPMENT_HISTORY.md)
 - [Crédits et remerciements](CREDITS.md)
 - chaque module possède son propre `README.md`.

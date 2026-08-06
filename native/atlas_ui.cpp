@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "paths.h"
+#include "window_frame.h"
 #include "atlas_ui.h"
 #include "dashboard.h"
 #include "input.h"
@@ -139,6 +140,8 @@ std::unordered_map<std::string, int> g_entry_by_id[kCats];   // id -> entry idx
 
 int   g_atlas = -1;                      // overlay texture handle
 int   g_close_texture = -1;              // shared FMK window chrome
+int   g_title_texture = -1;              // Inventory module icon
+int   g_resize_texture = -1;             // shared resize grip
 float g_atlas_w = 0, g_atlas_h = 0;      // for uv math
 volatile LONG g_loaded = 0;
 
@@ -286,6 +289,10 @@ void save_layout_dirty() { InterlockedExchange(&g_layout_dirty, 1); }
 
 // Written by the render thread, persisted by the worker in atlas_ui_tick.
 volatile LONG g_win_x = 140, g_win_y = 110;
+volatile LONG g_win_w = 985, g_win_h = 660;
+bool g_resizing = false;
+float g_resize_start_x = 0, g_resize_start_y = 0;
+float g_resize_start_w = 0, g_resize_start_h = 0;
 volatile LONG g_tab = 0;
 volatile LONG g_save_state = 0;  // 0 idle, 1 requested, 2 completed
 volatile LONG g_save_tick = 0;
@@ -1457,6 +1464,22 @@ void atlas_ui_set_close_texture(int texture) {
     g_close_texture = texture;
 }
 
+void atlas_ui_set_title_texture(int texture) {
+    g_title_texture = texture;
+}
+
+void atlas_ui_set_resize_texture(int texture) {
+    g_resize_texture = texture;
+}
+
+void atlas_ui_reset_layout() {
+    InterlockedExchange(&g_win_x, 140);
+    InterlockedExchange(&g_win_y, 110);
+    InterlockedExchange(&g_win_w, (LONG)kWinW);
+    InterlockedExchange(&g_win_h, (LONG)kWinH);
+    save_layout_dirty();
+}
+
 bool atlas_ui_init() {
     if (!g_own_cs_init) {
         InitializeCriticalSection(&g_own_cs);
@@ -1464,13 +1487,20 @@ bool atlas_ui_init() {
     }
     std::wstring dir = exe_dir();
     if (dir.empty()) return false;
-    g_ini_path = dir + L"farever-modkit.ini";
+    g_ini_path = user_data_dir() + L"settings\\farever-modkit.ini";
+    const std::wstring legacy_ini = dir + L"farever-modkit.ini";
+    if (GetFileAttributesW(g_ini_path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+        GetFileAttributesW(legacy_ini.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        CopyFileW(legacy_ini.c_str(), g_ini_path.c_str(), TRUE);
+    }
 
     if (!load_tsv(dir + L"farever-atlas.tsv")) return false;
     load_icons(dir);
 
     g_win_x = GetPrivateProfileIntW(L"atlas", L"x", 140, g_ini_path.c_str());
     g_win_y = GetPrivateProfileIntW(L"atlas", L"y", 110, g_ini_path.c_str());
+    g_win_w = GetPrivateProfileIntW(L"atlas", L"w", (int)kWinW, g_ini_path.c_str());
+    g_win_h = GetPrivateProfileIntW(L"atlas", L"h", (int)kWinH, g_ini_path.c_str());
     LONG tab = GetPrivateProfileIntW(L"atlas", L"tab", 0, g_ini_path.c_str());
     g_tab = (tab >= 0 && tab < kTabs) ? tab : 0;
 
@@ -1493,17 +1523,102 @@ bool atlas_ui_init() {
 // Recipes are per-character, so the ones a character knows are written out
 // the way inventories are - that is how the atlas can say "known by Emsei"
 // while you are playing someone else.
+void write_collection_json(const Collection& c, const std::string& account) {
+    const std::wstring path = account_data_dir(account) + L"farever-collection.json";
+
+    FILE* f = _wfsopen(path.c_str(), L"w", _SH_DENYNO);
+    if (!f) return;
+
+    auto list = [&](const char* name, const std::vector<std::string>& v, bool last) {
+        fprintf(f, "  \"%s\": [", name);
+        for (size_t i = 0; i < v.size(); i++) {
+            fprintf(f, "%s\n    \"%s\"", i ? "," : "", v[i].c_str());
+        }
+        fprintf(f, "%s]%s\n", v.empty() ? "" : "\n  ", last ? "" : ",");
+    };
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"steamAccountId\": \"%s\",\n", account.c_str());
+    fprintf(f, "  \"bankSlots\": %d,\n", c.bank_slots);
+    list("mounts", c.mounts, false);
+    list("gliders", c.gliders, false);
+    list("pets", c.pets, false);
+    list("gears", c.gears, false);
+    list("toys", c.toys, false);
+    list("emotes", c.emotes, true);
+    fprintf(f, "}\n");
+    fclose(f);
+    host_log("collection: wrote farever-collection.json");
+}
+
+void write_inventory_json(const Inventories& inv, const std::string& character,
+                          const std::string& character_uuid) {
+    std::wstring path = character_data_dir(inv.steam_account_id, character_uuid, character);
+
+    // Character names come from the game; keep the filename to safe chars.
+    std::string safe;
+    for (char c : character) {
+        if (isalnum((unsigned char)c) || c == '_' || c == '-') safe.push_back(c);
+    }
+    if (safe.empty()) safe = "unknown";
+    std::wstring wname(safe.begin(), safe.end());
+    std::string safe_uuid;
+    for (char c : character_uuid)
+        if (isalnum((unsigned char)c) || c == '_' || c == '-') safe_uuid.push_back(c);
+    if (safe_uuid.empty()) safe_uuid = "unknown";
+    path += L"farever-inventory-" + wname + L"-" +
+            std::wstring(safe_uuid.begin(), safe_uuid.end()) + L".json";
+
+    FILE* f = _wfsopen(path.c_str(), L"w", _SH_DENYNO);
+    if (!f) return;
+
+    auto emit = [&](const char* name, const std::vector<Item>& v, bool last) {
+        fprintf(f, "  \"%s\": [", name);
+        for (size_t i = 0; i < v.size(); i++) {
+            const Item& it = v[i];
+            fprintf(f,
+                    "%s\n    {\"kind\":\"%s\",\"level\":%d,\"upgrade\":%d,"
+                    "\"rarity\":%d,\"count\":%d,\"class\":\"%s\"}",
+                    i ? "," : "", it.kind.c_str(), it.level, it.upgrade,
+                    it.rarity, it.count, it.cls.c_str());
+        }
+        fprintf(f, "%s]%s\n", v.empty() ? "" : "\n  ", last ? "" : ",");
+    };
+
+    fprintf(f, "{\n");
+    fprintf(f, "  \"character\": \"%s\",\n", safe.c_str());
+    fprintf(f, "  \"characterUuid\": \"%s\",\n", safe_uuid.c_str());
+    fprintf(f, "  \"steamAccountId\": \"%s\",\n", inv.steam_account_id.c_str());
+    fprintf(f, "  \"heroClass\": \"%s\",\n", inv.hero_class.c_str());
+    fprintf(f, "  \"level\": %d,\n", inv.character_level);
+    fprintf(f, "  \"experience\": %d,\n", inv.experience);
+    fprintf(f, "  \"activeWeapon\": \"%s\",\n", inv.active_weapon.c_str());
+    fprintf(f, "  \"bankSlots\": %d,\n", inv.bank_slots);
+    emit("bank", inv.bank, false);
+    emit("bankEquipment", inv.bank_equipment, false);
+    emit("equipped", inv.equipped, false);
+    emit("bags", inv.bags, true);
+    fprintf(f, "}\n");
+    fclose(f);
+
+    host_log("inventory: %s bank=%zu bankEq=%zu equipped=%zu bags=%zu",
+             safe.c_str(), inv.bank.size(), inv.bank_equipment.size(),
+             inv.equipped.size(), inv.bags.size());
+}
+
 void write_jobs_json(const std::vector<JobState>& jobs,
                      const RuneState& runes, const std::vector<WeaponMastery>& mastery,
                      const std::string& character, const std::string& character_uuid, const std::string& account_uuid) {
-    if ((jobs.empty() && runes.learned.empty()) || character.empty()) return;
+    if ((jobs.empty() && runes.learned.empty() && mastery.empty()) || character.empty()) return;
     std::wstring path = character_data_dir(account_uuid, character_uuid, character);
     if (path.empty()) return;
     std::string safe = sanitize_name(character);
     if (safe.empty()) return;
     path += L"farever-jobs-" + std::wstring(safe.begin(), safe.end()) + L".json";
 
-    std::string out = "{\n  \"character\": \"" + safe + "\", \"characterUuid\": \"" + character_uuid + "\", \"jobs\": [";
+    std::string out = "{\n  \"character\": \"" + safe +
+        "\", \"characterUuid\": \"" + character_uuid +
+        "\", \"steamAccountId\": \"" + account_uuid + "\", \"jobs\": [";
     for (size_t i = 0; i < jobs.size(); i++) {
         char head[128];
         _snprintf_s(head, sizeof(head), _TRUNCATE,
@@ -1645,7 +1760,13 @@ void atlas_ui_update(const Collection& c, const Inventories& inv,
     // places that are genuinely still there.
     for (const auto& id : done.done) snap->done_sources.insert(id);
     // Archive creation belongs to an optional Patobeur module, never Atlas.
-    (void)save_to_disk;
+    if (save_to_disk) {
+        if (c.valid && !inv.steam_account_id.empty())
+            write_collection_json(c, inv.steam_account_id);
+        if (inv.valid) write_inventory_json(inv, inv.character, inv.character_uuid);
+        write_jobs_json(jobs, runes, mastery, snap->character,
+                        inv.character_uuid, inv.steam_account_id);
+    }
     {
         const std::string skip = sanitize_name(snap->character);
         std::wstring dir = exe_dir();
@@ -1827,7 +1948,8 @@ void atlas_ui_draw(float screen_w, float screen_h) {
     }
 
     // --- window placement ---------------------------------------------------
-    float win_w = kWinW, win_h = kWinH;
+    float win_w = (float)(LONG)InterlockedCompareExchange(&g_win_w, 0, 0);
+    float win_h = (float)(LONG)InterlockedCompareExchange(&g_win_h, 0, 0);
     if (win_w > screen_w - 40) win_w = screen_w - 40;
     if (win_h > screen_h - 40) win_h = screen_h - 40;
 
@@ -1836,19 +1958,35 @@ void atlas_ui_draw(float screen_w, float screen_h) {
     const float save_x = wx + 170, save_y = wy + 4, save_w = 0, save_h = 0;
     const float report_x = save_x, report_w = 0;
 
-    // Dragging: a press on the title bar picks the window up; releasing the
-    // button anywhere drops it.
-    if (clicked && in.click_x >= wx && in.click_x < wx + win_w - 36 &&
-        in.click_y >= wy && in.click_y < wy + kTitleH &&
-        !(in.click_x >= save_x && in.click_x < save_x + save_w &&
-          in.click_y >= save_y && in.click_y < save_y + save_h) &&
-        !(in.click_x >= report_x && in.click_x < report_x + report_w &&
-          in.click_y >= save_y && in.click_y < save_y + save_h)) {
+    // Shared resize grip and title-bar dragging.
+    const bool resize_pressed = clicked &&
+        in.click_x >= wx + win_w - 20 && in.click_x < wx + win_w &&
+        in.click_y >= wy + win_h - 20 && in.click_y < wy + win_h;
+    if (resize_pressed) {
+        g_resizing = true;
+        g_dragging = false;
+        g_resize_start_x = (float)in.click_x;
+        g_resize_start_y = (float)in.click_y;
+        g_resize_start_w = win_w;
+        g_resize_start_h = win_h;
+    } else if (clicked && in.click_x >= wx && in.click_x < wx + win_w - 36 &&
+        in.click_y >= wy && in.click_y < wy + kTitleH) {
         g_dragging = true;
+        g_resizing = false;
         g_drag_dx = in.click_x - wx;
         g_drag_dy = in.click_y - wy;
     }
-    if (g_dragging) {
+    if (g_resizing) {
+        if (in.lbutton) {
+            win_w = (std::max)(620.0f, g_resize_start_w + in.mouse_x - g_resize_start_x);
+            win_h = (std::max)(420.0f, g_resize_start_h + in.mouse_y - g_resize_start_y);
+            win_w = (std::min)(win_w, screen_w - wx);
+            win_h = (std::min)(win_h, screen_h - wy);
+        } else {
+            g_resizing = false;
+            save_layout_dirty();
+        }
+    } else if (g_dragging) {
         if (in.lbutton) {
             wx = in.mouse_x - g_drag_dx;
             wy = in.mouse_y - g_drag_dy;
@@ -1856,24 +1994,24 @@ void atlas_ui_draw(float screen_w, float screen_h) {
             g_dragging = false;
             save_layout_dirty();
         }
-    }
-    if (wx < 8 - win_w + 80) wx = 8 - win_w + 80;
+    }    if (wx < 8 - win_w + 80) wx = 8 - win_w + 80;
     if (wy < 0) wy = 0;
     if (wx > screen_w - 80) wx = screen_w - 80;
     if (wy > screen_h - kTitleH) wy = screen_h - kTitleH;
     InterlockedExchange(&g_win_x, (LONG)wx);
     InterlockedExchange(&g_win_y, (LONG)wy);
+    InterlockedExchange(&g_win_w, (LONG)win_w);
+    InterlockedExchange(&g_win_h, (LONG)win_h);
     input_set_ui_rect((int)wx, (int)wy, (int)win_w, (int)win_h);
 
     int tab = (int)InterlockedCompareExchange(&g_tab, 0, 0);
     if (tab < 0 || tab >= kTabs) tab = 0;
 
-    // --- chrome -------------------------------------------------------------
-    draw_rect(wx, wy, win_w, win_h, kBg);
-    draw_rect(wx, wy, win_w, kTitleH, kBgTitle);
-    draw_rect_outline(wx, wy, win_w, win_h, 1.5f, kEdge);
-    draw_text(wx + kPad, wy + 8, 16, kText, "Collection Atlas");
-
+    // --- shared FMK window frame -------------------------------------------
+    const auto atlas_frame = draw_window_frame(
+        {wx, wy, win_w, win_h, "Collection Atlas", g_title_texture,
+         g_close_texture, kTitleH, kBg, kBgTitle, kEdge, true, g_resize_texture},
+        {true, (float)in.mouse_x, (float)in.mouse_y, clicked});
     if (false) { // Export controls belong to the optional Patobeur module.
     LONG save_state = InterlockedCompareExchange(&g_save_state, 0, 0);
     if (save_state == 2 && GetTickCount() -
@@ -1933,26 +2071,10 @@ void atlas_ui_draw(float screen_w, float screen_h) {
         draw_text(wx + win_w - 40 - ww, wy + 11, 12, kTextFaint, who);
     }
 
-    // Close button.
-    const float cx0 = wx + win_w - 32, cy0 = wy + 7;
-    const bool close_hot = in.mouse_x >= cx0 && in.mouse_x < cx0 + 20 &&
-                           in.mouse_y >= cy0 && in.mouse_y < cy0 + 20;
-    if (g_close_texture >= 1) {
-        draw_image(g_close_texture, cx0, cy0, 20, 20, 0, 0, 1, 1,
-                   close_hot ? Color{1.0f, 0.72f, 0.72f, 1.0f}
-                             : Color{1.0f, 1.0f, 1.0f, 1.0f});
-    } else {
-        draw_rect(cx0, cy0, 20, 20,
-                  close_hot ? Color{0.75f, 0.25f, 0.25f, 1.0f}
-                            : Color{0.18f, 0.20f, 0.28f, 1.0f});
-        draw_text(cx0 + 5.5f, cy0 + 1.5f, 14, kText, "x");
-    }
-    if (clicked && in.click_x >= cx0 && in.click_x < cx0 + 20 &&
-        in.click_y >= cy0 && in.click_y < cy0 + 20) {
+    if (atlas_frame.close_clicked) {
         input_set_visible(false);
         return;
     }
-
     // --- tabs ---------------------------------------------------------------
     //
     // Eleven pages do not fit on one row, so the strip wraps and the content

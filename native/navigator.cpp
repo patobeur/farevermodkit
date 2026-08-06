@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -336,8 +337,16 @@ void nav_init() {
         InitializeCriticalSection(&g_cs);
         g_cs_init = true;
     }
-    g_ini_path = data_dir() + L"farever-modkit.ini";
-    g_state_path = data_dir() + L"farever-nav-state.txt";
+    g_ini_path = user_data_dir() + L"settings\\farever-modkit.ini";
+    g_state_path = user_data_dir() + L"data\\navigation\\farever-nav-state.txt";
+    std::error_code directory_error;
+    std::filesystem::create_directories(
+        std::filesystem::path(g_state_path).parent_path(), directory_error);
+    const std::wstring legacy_state = data_dir() + L"farever-nav-state.txt";
+    if (GetFileAttributesW(g_state_path.c_str()) == INVALID_FILE_ATTRIBUTES &&
+        GetFileAttributesW(legacy_state.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        CopyFileW(legacy_state.c_str(), g_state_path.c_str(), TRUE);
+    }
 
     g_nav_x = GetPrivateProfileIntW(L"navigator", L"x", kUnplaced,
                                     g_ini_path.c_str());

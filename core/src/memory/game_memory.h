@@ -2,6 +2,7 @@
 
 #include "hl_reader.h"
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -26,7 +27,7 @@ struct MemoryStatus {
 // a scan safe.
 class GameMemory {
 public:
-    GameMemory() = default;
+    GameMemory();
     GameMemory(const GameMemory&) = delete;
     GameMemory& operator=(const GameMemory&) = delete;
 
@@ -63,16 +64,25 @@ public:
     bool boss_tracking_enabled(const std::string& kind) const;
     void set_boss_tracking_enabled(const std::string& kind, bool enabled);
     bool read_hero_pose(double* x, double* y, double* z, double* rot_z);
+    // Report generation is requested by Lua and consumed by the existing
+    // atlas worker, so no disk export or broad snapshot runs on Present.
+    void request_report_export();
+    bool take_report_export_request();
+
     bool read_camera(double* px, double* py, double* pz,
                      double* tx, double* ty, double* tz);
 
 private:
+    void load_boss_tracking_settings();
+    void save_boss_tracking_settings_locked() const;
+
     mutable std::mutex mutex_;
     std::string configured_build_hash_;
     bool build_validated_ = false;
     uint64_t last_refresh_ms_ = 0;
     MemoryStatus status_{};
     std::unordered_set<std::string> enabled_extra_kinds_;
+    std::atomic<bool> report_export_requested_{false};
 };
 
 } // namespace fmk

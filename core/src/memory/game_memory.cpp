@@ -2,6 +2,9 @@
 #include <windows.h>
 #include <cctype>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <vector>
 
 #include "game_memory.h"
 #include "hl_runtime.h"
@@ -9,6 +12,59 @@
 #include "offsets.gen.h"
 
 namespace fmk {
+
+namespace {
+std::filesystem::path boss_tracking_path() {
+    wchar_t local[MAX_PATH] = {};
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
+    const std::filesystem::path root = n && n < MAX_PATH
+        ? std::filesystem::path(local) / L"farevermodkit"
+        : std::filesystem::current_path() / L"farevermodkit-user-data";
+    return root / L"settings" / L"bossrun-tracked.txt";
+}
+}
+
+GameMemory::GameMemory() {
+    load_boss_tracking_settings();
+}
+
+void GameMemory::load_boss_tracking_settings() {
+    std::ifstream input(boss_tracking_path(), std::ios::binary);
+    std::string kind;
+    while (std::getline(input, kind)) {
+        if (!kind.empty() && kind.back() == '\r') kind.pop_back();
+        if (kind.empty() || kind.size() > 160) continue;
+        if (std::all_of(kind.begin(), kind.end(), [](unsigned char c) {
+                return c >= 0x20 && c != 0x7f;
+            })) enabled_extra_kinds_.insert(kind);
+    }
+    memory_log("bossrun: restored %zu tracked ordinary monster kind(s)",
+               enabled_extra_kinds_.size());
+}
+
+void GameMemory::save_boss_tracking_settings_locked() const {
+    const auto path = boss_tracking_path();
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) {
+        memory_log("bossrun: cannot create centralized settings directory");
+        return;
+    }
+    std::vector<std::string> kinds(enabled_extra_kinds_.begin(),
+                                   enabled_extra_kinds_.end());
+    std::sort(kinds.begin(), kinds.end());
+    const auto temporary = path.wstring() + L".tmp";
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) return;
+        for (const auto& kind : kinds) output << kind << '\n';
+    }
+    if (!MoveFileExW(temporary.c_str(), path.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temporary.c_str());
+        memory_log("bossrun: failed to save tracked ordinary monsters");
+    }
+}
 
 bool GameMemory::configure_build_hash(const std::string& observed_hash) {
     std::lock_guard lock(mutex_);
@@ -128,6 +184,9 @@ void GameMemory::set_boss_tracking_enabled(const std::string& kind, bool enabled
     std::lock_guard lock(mutex_);
     if (enabled) enabled_extra_kinds_.insert(kind);
     else enabled_extra_kinds_.erase(kind);
+    save_boss_tracking_settings_locked();
+    memory_log("bossrun: ordinary monster %s tracking=%d", kind.c_str(),
+               enabled ? 1 : 0);
 }
 #undef FMK_MEMORY_READ
 
@@ -182,3 +241,11 @@ bool GameMemory::read_camera(double* px, double* py, double* pz,
 }
 
 } // namespace fmk
+
+void fmk::GameMemory::request_report_export() {
+    report_export_requested_.store(true, std::memory_order_release);
+}
+
+bool fmk::GameMemory::take_report_export_request() {
+    return report_export_requested_.exchange(false, std::memory_order_acq_rel);
+}

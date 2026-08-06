@@ -30,6 +30,9 @@ namespace fmk {
 // Worker thread, after overlay_ready(): loads TSV, icon atlas, saved layout.
 bool atlas_ui_init();
 void atlas_ui_set_close_texture(int texture);
+void atlas_ui_set_title_texture(int texture);
+void atlas_ui_set_resize_texture(int texture);
+void atlas_ui_reset_layout();
 
 // Worker thread: fresh reader output. Rebuilds the ownership snapshot the
 // draw side reads. `unit_progress` is the codex: unit id -> the count the

@@ -53,5 +53,5 @@ Cette organisation est prévue pour être consommée plus tard par le module Per
 ## Limites connues
 
 - la distinction instance/monde ouvert n’est pas encore exposée de manière fiable ;
-- la sélection persistante des monstres ordinaires n’est pas encore stockée sur disque ;
+- les monstres ordinaires activés sont conservés dans `%LOCALAPPDATA%\farevermodkit\settings\bossrun-tracked.txt` ;
 - les traductions concernent l’interface, jamais la détection.

@@ -274,6 +274,16 @@ int farever_bossrun_load(lua_State* state) {
     return 1;
 }
 
+int farever_report_generate(lua_State* state) {
+    bool accepted = false;
+    if (g_runtime && g_runtime->memory_context()) {
+        g_runtime->memory_context()->request_report_export();
+        accepted = true;
+    }
+    if (g_push_boolean) g_push_boolean(state, accepted ? 1 : 0);
+    return 1;
+}
+
 int farever_bossrun_save(lua_State* state) {
     const char* raw_kind = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
     const char* raw_class = g_to_string ? g_to_string(state, 2, nullptr) : nullptr;
@@ -422,6 +432,8 @@ bool LuaRuntime::install_sandbox() {
     set_field((lua_State*)state_, -2, "bossrun_load");
     push_cclosure((lua_State*)state_, &farever_bossrun_save, 0);
     set_field((lua_State*)state_, -2, "bossrun_save");
+    push_cclosure((lua_State*)state_, &farever_report_generate, 0);
+    set_field((lua_State*)state_, -2, "report_generate");
     set_global((lua_State*)state_, "farever");
     sandbox_ready_ = true;
     return true;

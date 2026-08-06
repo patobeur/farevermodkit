@@ -9,7 +9,7 @@ call "%VSROOT%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if not exist build mkdir build
 cl /nologo /LD /O2 /MT /W3 /EHa /std:c++17 /D_CRT_SECURE_NO_WARNINGS ^
    /I. /I..\core\src /Fo:build\ /Fe:build\dxgi.dll ^
-   dxgi_proxy.cpp dxgi_wrap.cpp overlay_d3d12.cpp atlas_ui.cpp atlas_input.cpp navigator.cpp atlas_stubs.cpp ^
+   dxgi_proxy.cpp dxgi_wrap.cpp overlay_d3d12.cpp atlas_ui.cpp atlas_input.cpp navigator.cpp atlas_stubs.cpp report.cpp ^
    ..\core\build\plugin_host.obj ..\core\build\plugin_manager.obj ..\core\build\lua_runtime.obj ^
    ..\core\build\memory_log.obj ..\core\build\hl_runtime.obj ..\core\build\hl_scan.obj ^
    ..\core\build\hl_reader.obj ..\core\build\game_memory.obj ^

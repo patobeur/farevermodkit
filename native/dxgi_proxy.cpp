@@ -22,6 +22,9 @@
 #include "atlas_ui.h"
 #include "input.h"
 #include "navigator.h"
+#include "window_frame.h"
+#include "paths.h"
+#include "report.h"
 #include "plugin_host.h"
 #include "memory/memory_log.h"
 
@@ -34,6 +37,11 @@ std::unique_ptr<fmk::PluginHost> g_plugins;
 volatile LONG g_atlas_ready = 0;
 int g_fmk_icon_texture = -1;
 int g_close_icon_texture = -1;
+int g_resize_icon_texture = -1;
+int g_reset_icons_texture = -1;
+int g_reset_windows_texture = -1;
+int g_lock_texture = -1;
+int g_unlock_texture = -1;
 int g_module_on_texture = -1;
 int g_module_off_texture = -1;
 int g_module_options_texture = -1;
@@ -252,6 +260,19 @@ DWORD WINAPI early_memory_worker(void*) {
 void load_ui_icon_textures() {
     const auto fmk_icon = find_upward("farevermodkit/assets/fmk/icon.png");
     if (!fmk_icon.empty()) g_fmk_icon_texture = fmk::overlay_load_image(fmk_icon.u8string().c_str());
+    const auto resize_icon = find_upward("farevermodkit/assets/fmk/resize.png");
+    const auto reset_icons = find_upward("farevermodkit/assets/fmk/reset-icons.png");
+    const auto reset_windows = find_upward("farevermodkit/assets/fmk/reset-windows.png");
+    const auto lock_icon = find_upward("farevermodkit/assets/fmk/lock.png");
+    const auto unlock_icon = find_upward("farevermodkit/assets/fmk/unlock.png");
+    if (!resize_icon.empty()) {
+        g_resize_icon_texture = fmk::overlay_load_image(resize_icon.u8string().c_str());
+        fmk::atlas_ui_set_resize_texture(g_resize_icon_texture);
+    }
+    if (!reset_icons.empty()) g_reset_icons_texture = fmk::overlay_load_image(reset_icons.u8string().c_str());
+    if (!reset_windows.empty()) g_reset_windows_texture = fmk::overlay_load_image(reset_windows.u8string().c_str());
+    if (!lock_icon.empty()) g_lock_texture = fmk::overlay_load_image(lock_icon.u8string().c_str());
+    if (!unlock_icon.empty()) g_unlock_texture = fmk::overlay_load_image(unlock_icon.u8string().c_str());
     const auto close_icon = find_upward("farevermodkit/assets/fmk/close.png");
     if (!close_icon.empty()) {
         g_close_icon_texture = fmk::overlay_load_image(close_icon.u8string().c_str());
@@ -276,6 +297,11 @@ void load_ui_icon_textures() {
         const auto path = status.manifest.directory / "icon.png";
         g_module_icon_textures[status.manifest.id] = std::filesystem::is_regular_file(path)
             ? fmk::overlay_load_image(path.u8string().c_str()) : -1;
+        if (status.manifest.id == "blaakan.inventory")
+            fmk::atlas_ui_set_title_texture(g_module_icon_textures[status.manifest.id]);
+        if (status.manifest.id == "patobeur.report") {
+            fmk::report_set_module_dir(status.manifest.directory);
+        }
         if (status.manifest.id == "patobeur.bossrun") {
             const auto enabled = status.manifest.directory / "assets" / "enabled.png";
             const auto disabled = status.manifest.directory / "assets" / "disabled.png";
@@ -337,10 +363,14 @@ DWORD WINAPI atlas_worker(void*) {
             g_plugins->memory().read_runes(&runes);
             g_plugins->memory().read_completion(&completion);
             g_plugins->memory().read_weapon_mastery(&mastery);
-            const bool save_requested = fmk::atlas_ui_take_save_request();
+            const bool atlas_save_requested = fmk::atlas_ui_take_save_request();
+            const bool report_requested =
+                g_plugins->memory().take_report_export_request();
+            const bool save_requested = atlas_save_requested || report_requested;
             fmk::atlas_ui_update(collection, inventories, units, jobs, runes,
                                  completion, mastery, save_requested);
-            if (save_requested) fmk::atlas_ui_mark_saved();
+            if (report_requested) fmk::report_refresh();
+            if (atlas_save_requested) fmk::atlas_ui_mark_saved();
             fmk::atlas_ui_tick();
         }
         fmk::nav_tick();
@@ -365,30 +395,55 @@ DWORD WINAPI overlay_worker(void*) {
     log_line("overlay: startup delay elapsed; installing hooks");
     if (native.overlay_stage >= 4) {
         fmk::overlay_set_draw([](float width, float height) {
-            struct WindowState { float x, y; };
+            struct WindowState { float x, y, w = 0.0f, h = 0.0f; };
             struct IconState { float x, y; bool moved; };
             static bool manager_open = false;
             static bool previous_click = false;
+            static bool capture_mode = false;
+            static bool previous_f2 = false;
             static float panel_x = 0.0f;
             static float panel_y = 146.0f;
+            static float panel_width = 650.0f;
+            static float panel_height_saved = 0.0f;
             static IconState fmk_icon{0.0f, 146.0f, false};
             static bool layout_initialized = false;
             static std::size_t module_scroll = 0;
             static std::unordered_map<std::string, WindowState> plugin_windows;
+            static WindowState bossrun_history_window{0.0f, 0.0f};
+            static bool bossrun_history_initialized = false;
+            static bool bossrun_history_moved = false;
+            static bool bossrun_history_open = true;
             static std::unordered_map<std::string, IconState> plugin_icons;
             static std::unordered_map<std::string, bool> plugin_open;
             static std::string dragging;
             static float drag_dx = 0.0f;
             static float drag_dy = 0.0f;
+            static float resize_origin_w = 0.0f;
+            static float resize_origin_h = 0.0f;
             static bool state_loaded = false;
             static std::filesystem::path state_path;
             static std::unordered_map<std::string, bool> saved_enabled;
             static bool atlas_input_open = false;
+            static bool reset_icons_requested = false;
+            static bool reset_windows_requested = false;
+            static bool icon_positions_locked = false;
             bool state_dirty = false;
 
             if (!state_loaded) {
+                state_path = std::filesystem::path(fmk::user_data_dir()) /
+                             "settings" / "ui-state.json";
                 const auto native_config = find_upward("farevermodkit/config/native.json");
-                if (!native_config.empty()) state_path = native_config.parent_path() / "ui-state.json";
+                const auto legacy_state = native_config.empty()
+                    ? std::filesystem::path{}
+                    : native_config.parent_path() / "ui-state.json";
+                if (!std::filesystem::is_regular_file(state_path) &&
+                    std::filesystem::is_regular_file(legacy_state)) {
+                    std::error_code migration_error;
+                    std::filesystem::copy_file(legacy_state, state_path,
+                        std::filesystem::copy_options::skip_existing, migration_error);
+                    log_line("ui-state: legacy settings migration %s",
+                             migration_error ? "failed" : "completed");
+                }
                 if (!state_path.empty() && std::filesystem::is_regular_file(state_path)) {
                     std::ifstream input(state_path, std::ios::binary);
                     const std::string saved((std::istreambuf_iterator<char>(input)),
@@ -410,9 +465,19 @@ DWORD WINAPI overlay_worker(void*) {
                     manager_open = read_bool("managerOpen", manager_open);
                     panel_x = read_number("panelX", panel_x);
                     panel_y = read_number("panelY", panel_y);
+                    panel_width = read_number("panelW", panel_width);
+                    panel_height_saved = read_number("panelH", panel_height_saved);
                     fmk_icon.x = read_number("fmkX", fmk_icon.x);
                     fmk_icon.y = read_number("fmkY", fmk_icon.y);
                     fmk_icon.moved = read_bool("fmkMoved", true);
+                    icon_positions_locked = read_bool("iconPositionsLocked", false);
+                    bossrun_history_window.x = read_number("bossRunHistoryX", 0.0f);
+                    bossrun_history_window.y = read_number("bossRunHistoryY", 0.0f);
+                    bossrun_history_window.w = read_number("bossRunHistoryW", 400.0f);
+                    bossrun_history_window.h = read_number("bossRunHistoryH", 110.0f);
+                    bossrun_history_moved = read_bool("bossRunHistoryMoved", false);
+                    bossrun_history_initialized = bossrun_history_moved;
+                    bossrun_history_open = read_bool("bossRunHistoryOpen", true);
                     module_scroll = (std::size_t)std::max(0.0f,
                         read_number("moduleScroll", (float)module_scroll));
                     const std::regex module_pattern(
@@ -434,6 +499,16 @@ DWORD WINAPI overlay_worker(void*) {
                         plugin_windows[id] = {std::stof(match[6].str()), std::stof(match[7].str())};
                         plugin_open[id] = match[8].str() == "true";
                     }
+                    const std::regex size_pattern(
+                        "\\{\\s*\\\"id\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"\\s*,\\s*"
+                        "\\\"w\\\"\\s*:\\s*(-?[0-9.]+)\\s*,\\s*"
+                        "\\\"h\\\"\\s*:\\s*(-?[0-9.]+)\\s*\\}");
+                    for (std::sregex_iterator it(saved.begin(), saved.end(), size_pattern), end;
+                         it != end; ++it) {
+                        auto& win = plugin_windows[(*it)[1].str()];
+                        win.w = std::stof((*it)[2].str());
+                        win.h = std::stof((*it)[3].str());
+                    }
                     layout_initialized = true;
                 }
                 if (g_plugins) {
@@ -449,6 +524,23 @@ DWORD WINAPI overlay_worker(void*) {
                 g_plugins->memory().refresh();
                 g_plugins->render();
             }
+
+            // Screenshot mode observes F2 without consuming it: the game still
+            // receives its own F2 action. Only FMK rendering/input is suspended.
+            const bool f2_down = (GetAsyncKeyState(VK_F2) & 0x8000) != 0;
+            if (f2_down && !previous_f2) capture_mode = !capture_mode;
+            previous_f2 = f2_down;
+            if (capture_mode) {
+                if (atlas_input_open) {
+                    fmk::input_set_visible(false);
+                    atlas_input_open = false;
+                }
+                if (!manager_open) fmk::input_set_wheel_rect(0, 0, 0, 0);
+                dragging.clear();
+                previous_click = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+                return;
+            }
+
             if (InterlockedCompareExchange(&g_atlas_ready, 0, 0))
                 fmk::nav_draw(width, height);
             POINT cursor{};
@@ -470,6 +562,13 @@ DWORD WINAPI overlay_worker(void*) {
                 dragging = id;
                 drag_dx = (float)cursor.x - x;
                 drag_dy = (float)cursor.y - y;
+            };
+            auto start_resize = [&](const std::string& id, float w, float h) {
+                dragging = "%" + id;
+                drag_dx = (float)cursor.x;
+                drag_dy = (float)cursor.y;
+                resize_origin_w = w;
+                resize_origin_h = h;
             };
             auto button = [](float x, float y, float w, const char* label,
                              bool hot, fmk::Color color) {
@@ -518,9 +617,18 @@ DWORD WINAPI overlay_worker(void*) {
                        << "  \"managerOpen\": " << (manager_open ? "true" : "false") << ",\n"
                        << "  \"panelX\": " << panel_x << ",\n"
                        << "  \"panelY\": " << panel_y << ",\n"
+                       << "  \"panelW\": " << panel_width << ",\n"
+                       << "  \"panelH\": " << panel_height_saved << ",\n"
                        << "  \"fmkX\": " << fmk_icon.x << ",\n"
                        << "  \"fmkY\": " << fmk_icon.y << ",\n"
                        << "  \"fmkMoved\": " << (fmk_icon.moved ? "true" : "false") << ",\n"
+                       << "  \"iconPositionsLocked\": " << (icon_positions_locked ? "true" : "false") << ",\n"
+                       << "  \"bossRunHistoryX\": " << bossrun_history_window.x << ",\n"
+                       << "  \"bossRunHistoryY\": " << bossrun_history_window.y << ",\n"
+                       << "  \"bossRunHistoryW\": " << bossrun_history_window.w << ",\n"
+                       << "  \"bossRunHistoryH\": " << bossrun_history_window.h << ",\n"
+                       << "  \"bossRunHistoryMoved\": " << (bossrun_history_moved ? "true" : "false") << ",\n"
+                       << "  \"bossRunHistoryOpen\": " << (bossrun_history_open ? "true" : "false") << ",\n"
                        << "  \"moduleScroll\": " << module_scroll << ",\n"
                        << "  \"modules\": [\n";
                 bool first = true;
@@ -542,9 +650,40 @@ DWORD WINAPI overlay_worker(void*) {
                            << ",\"open\":" << (plugin_open[status.manifest.id] ? "true" : "false")
                            << "}";
                 }
+                output << "\n  ],\n  \"windowSizes\": [\n";
+                first = true;
+                for (const auto& status : current_statuses) {
+                    if (!first) output << ",\n";
+                    first = false;
+                    const auto it = plugin_windows.find(status.manifest.id);
+                    const WindowState win = it != plugin_windows.end()
+                        ? it->second : WindowState{};
+                    output << "    {\"id\":\"" << status.manifest.id
+                           << "\",\"w\":" << win.w << ",\"h\":" << win.h << "}";
+                }
                 output << "\n  ]\n}\n";
             };
-            constexpr float panel_width = 650.0f;
+            if (reset_icons_requested && width > panel_width + 90.0f) {
+                fmk_icon = {width - 76.0f,
+                            std::clamp(146.0f, 0.0f, std::max(0.0f, height - 58.0f)),
+                            false};
+                plugin_icons.clear();
+                reset_icons_requested = false;
+                state_dirty = true;
+            }
+            if (reset_windows_requested) {
+                panel_width = 650.0f;
+                panel_height_saved = 0.0f;
+                panel_x = std::max(0.0f, width - 76.0f - panel_width - 8.0f);
+                panel_y = std::clamp(146.0f, 0.0f, std::max(0.0f, height - 120.0f));
+                plugin_windows.clear();
+                bossrun_history_window = {};
+                bossrun_history_moved = false;
+                bossrun_history_initialized = false;
+                fmk::atlas_ui_reset_layout();
+                reset_windows_requested = false;
+                state_dirty = true;
+            }
             if (!layout_initialized && width > panel_width + 90.0f) {
                 fmk_icon.x = width - 76.0f;
                 fmk_icon.y = std::clamp(146.0f, 0.0f, std::max(0.0f, height - 58.0f));
@@ -554,10 +693,13 @@ DWORD WINAPI overlay_worker(void*) {
             }
             std::size_t enabled_index = 0;
             for (const auto& status : statuses) {
-                if (!status.enabled || (status.manifest.requires_game_world && !world_available)) {
+                if (!status.enabled) {
                     plugin_open[status.manifest.id] = false;
                     continue;
                 }
+                // A world-dependent window is only hidden during loading. Keep
+                // the player's open/closed choice so it returns in the next world.
+                if (status.manifest.requires_game_world && !world_available) continue;
                 const float default_icon_x = fmk_icon.x;
                 const float default_icon_y = fmk_icon.y + 68.0f * (float)(enabled_index + 1);
                 auto [icon_it, icon_inserted] = plugin_icons.try_emplace(
@@ -578,20 +720,35 @@ DWORD WINAPI overlay_worker(void*) {
             constexpr float icon_size = 58.0f;
             const bool fmk_hot = in_rect(fmk_icon.x, fmk_icon.y, icon_size, icon_size);
             if (clicked && fmk_hot) {
-                fmk_icon.moved = false;
-                start_drag("@fmk", fmk_icon.x, fmk_icon.y);
+                if (icon_positions_locked) {
+                    manager_open = !manager_open;
+                    state_dirty = true;
+                } else {
+                    fmk_icon.moved = false;
+                    start_drag("@fmk", fmk_icon.x, fmk_icon.y);
+                }
             }
             if (clicked && dragging.empty()) {
                 for (const auto& status : statuses) {
                     if (!status.enabled || (status.manifest.requires_game_world && !world_available)) continue;
                     auto& icon = plugin_icons[status.manifest.id];
                     if (in_rect(icon.x, icon.y, icon_size, icon_size)) {
-                        plugin_open[status.manifest.id] = !plugin_open[status.manifest.id];
+                        if (status.manifest.id == "patobeur.bossrun") {
+                            const bool desired = !(plugin_open[status.manifest.id] ||
+                                                   bossrun_history_open);
+                            plugin_open[status.manifest.id] = desired;
+                            bossrun_history_open = desired;
+                        } else {
+                            plugin_open[status.manifest.id] =
+                                !plugin_open[status.manifest.id];
+                        }
                         state_dirty = true;
                         log_line("ui: %s open=%d", status.manifest.id.c_str(),
                                  plugin_open[status.manifest.id] ? 1 : 0);
-                        icon.moved = false;
-                        start_drag("@" + status.manifest.id, icon.x, icon.y);
+                        if (!icon_positions_locked) {
+                            icon.moved = false;
+                            start_drag("@" + status.manifest.id, icon.x, icon.y);
+                        }
                         break;
                     }
                 }
@@ -651,61 +808,117 @@ DWORD WINAPI overlay_worker(void*) {
 
             const float row_height = 38.0f;
             const float author_height = 34.0f;
-            constexpr std::size_t max_visible_modules = 8;
-            const std::size_t max_scroll = ordered_statuses.size() > max_visible_modules
-                ? ordered_statuses.size() - max_visible_modules : 0;
+            if (panel_height_saved <= 0.0f)
+                panel_height_saved = std::min(650.0f, height - panel_y);
+            const float panel_height = std::max(180.0f, panel_height_saved);
+            const std::size_t max_scroll = ordered_statuses.empty()
+                ? 0 : ordered_statuses.size() - 1;
             module_scroll = std::min(module_scroll, max_scroll);
-            const std::size_t list_end = std::min(ordered_statuses.size(),
-                                                   module_scroll + max_visible_modules);
-            const std::size_t visible_modules = list_end - module_scroll;
-            std::size_t visible_authors = 0;
-            std::string counted_author;
-            for (std::size_t i = module_scroll; i < list_end; ++i) {
-                if (ordered_statuses[i]->manifest.author != counted_author) {
-                    counted_author = ordered_statuses[i]->manifest.author;
-                    ++visible_authors;
-                }
-            }
-            const bool can_scroll = ordered_statuses.size() > max_visible_modules;
-            const float panel_height = 112.0f + (float)visible_modules * row_height +
-                                       (float)visible_authors * author_height +
-                                       (can_scroll ? 36.0f : 0.0f);
             if (manager_open) {
+                const int wheel = fmk::input_take_wheel_in(
+                    (int)panel_x, (int)(panel_y + 34.0f),
+                    (int)panel_width, (int)(panel_height - 34.0f));
+                if (wheel > 0 && module_scroll > 0) {
+                    const std::size_t amount = (std::size_t)wheel;
+                    module_scroll = amount >= module_scroll ? 0 : module_scroll - amount;
+                    state_dirty = true;
+                } else if (wheel < 0 && module_scroll < max_scroll) {
+                    module_scroll = std::min(max_scroll,
+                        module_scroll + (std::size_t)(-wheel));
+                    state_dirty = true;
+                }
+                fmk::input_set_wheel_rect((int)panel_x, (int)(panel_y + 34.0f),
+                                          (int)panel_width,
+                                          (int)(panel_height - 34.0f));
+            }
+            std::size_t list_end = module_scroll;
+            float list_used = 0.0f;
+            const float list_capacity = std::max(38.0f, panel_height - 80.0f);
+            std::string measured_author;
+            while (list_end < ordered_statuses.size()) {
+                const std::string& author = ordered_statuses[list_end]->manifest.author;
+                const float needed = row_height +
+                    (author != measured_author ? author_height : 0.0f);
+                if (list_end > module_scroll && list_used + needed > list_capacity) break;
+                list_used += needed;
+                measured_author = author;
+                ++list_end;
+            }
+            const std::size_t visible_modules = list_end - module_scroll;
+            const bool can_scroll = module_scroll > 0 || list_end < ordered_statuses.size();            if (manager_open) {
                 const float manager_close_x = panel_x + panel_width - 30.0f;
                 const float manager_close_y = panel_y + 6.0f;
                 const bool manager_close_hot = in_rect(manager_close_x, manager_close_y, 22.0f, 22.0f);
+                const float reset_icons_x = panel_x + 224.0f;
+                const float reset_windows_x = panel_x + 258.0f;
+                const float icon_lock_x = panel_x + 292.0f;
+                const bool reset_icons_hot = in_rect(reset_icons_x, panel_y + 4.0f, 26.0f, 26.0f);
+                const bool reset_windows_hot = in_rect(reset_windows_x, panel_y + 4.0f, 26.0f, 26.0f);
+                const bool icon_lock_hot = in_rect(icon_lock_x, panel_y + 4.0f, 26.0f, 26.0f);
+                const bool manager_resize_hot = in_rect(panel_x + panel_width - 20.0f,
+                                                        panel_y + panel_height - 20.0f,
+                                                        20.0f, 20.0f);
                 if (clicked && dragging.empty() && manager_close_hot) {
                     manager_open = false;
                     state_dirty = true;
+                } else if (clicked && dragging.empty() && reset_icons_hot) {
+                    reset_icons_requested = true;
+                } else if (clicked && dragging.empty() && reset_windows_hot) {
+                    reset_windows_requested = true;
+                } else if (clicked && dragging.empty() && icon_lock_hot) {
+                    icon_positions_locked = !icon_positions_locked;
+                    state_dirty = true;
+                } else if (clicked && dragging.empty() && manager_resize_hot) {
+                    start_resize("manager", panel_width, panel_height);
                 }
                 if (clicked && dragging.empty() && !manager_close_hot &&
+                    !reset_icons_hot && !reset_windows_hot && !icon_lock_hot &&
+                    !manager_resize_hot &&
                     in_rect(panel_x, panel_y, panel_width, 34.0f))
-                    start_drag("$manager", panel_x, panel_y);
+                    start_drag("$manager", panel_x, panel_y);                if (click_down && cursor_valid && dragging == "%manager") {
+                    panel_width = std::clamp(resize_origin_w + (float)cursor.x - drag_dx,
+                                             560.0f, width - panel_x);
+                    panel_height_saved = std::clamp(
+                        resize_origin_h + (float)cursor.y - drag_dy,
+                        180.0f, height - panel_y);
+                }
                 if (click_down && cursor_valid && dragging == "$manager") {
                     panel_x = (float)cursor.x - drag_dx;
                     panel_y = (float)cursor.y - drag_dy;
                     clamp_window(panel_x, panel_y, panel_width, panel_height);
                 }
-                fmk::draw_rect(panel_x, panel_y, panel_width, panel_height,
-                               {0.05f, 0.08f, 0.10f, 0.94f});
-                fmk::draw_rect(panel_x, panel_y, panel_width, 34.0f,
-                               {0.08f, 0.13f, 0.17f, 0.98f});
-                fmk::draw_rect_outline(panel_x, panel_y, panel_width, panel_height, 2.0f,
-                                       {0.25f, 0.75f, 0.95f, 1.0f});
-                if (g_fmk_icon_texture >= 1)
-                    fmk::draw_image(g_fmk_icon_texture, panel_x + 7, panel_y + 3,
-                                    28, 28, 0, 0, 1, 1, {1,1,1,1});
-                fmk::draw_text(panel_x + (g_fmk_icon_texture >= 1 ? 44.0f : 20.0f),
-                               panel_y + 8.0f, 24.0f,
-                               {1.0f, 1.0f, 1.0f, 1.0f}, "FareverModKit");                if (g_close_icon_texture >= 1)
-                    fmk::draw_image(g_close_icon_texture, manager_close_x, manager_close_y,
-                                    22, 22, 0, 0, 1, 1,
-                                    manager_close_hot
-                                        ? fmk::Color{1.0f,0.72f,0.72f,1.0f}
-                                        : fmk::Color{1.0f,1.0f,1.0f,1.0f});
-                else
-                    fmk::draw_text(manager_close_x + 5, manager_close_y + 1, 16,
-                                   {1,1,1,1}, "x");
+                fmk::draw_window_frame(
+                    {panel_x, panel_y, panel_width, panel_height,
+                     "FareverModKit", g_fmk_icon_texture, g_close_icon_texture,
+                     34.0f, {0.05f,0.08f,0.10f,0.94f},
+                     {0.08f,0.13f,0.17f,0.98f}, {0.25f,0.75f,0.95f,1.0f},
+                     true, g_resize_icon_texture},
+                    {cursor_valid, (float)cursor.x, (float)cursor.y, clicked});
+                if (g_reset_icons_texture >= 1)
+                    fmk::draw_image(g_reset_icons_texture, reset_icons_x, panel_y + 4.0f,
+                                    26, 26, 0, 0, 1, 1,
+                                    reset_icons_hot ? fmk::Color{1,1,0.75f,1}
+                                                    : fmk::Color{1,1,1,1});
+                if (g_reset_windows_texture >= 1)
+                    fmk::draw_image(g_reset_windows_texture, reset_windows_x, panel_y + 4.0f,
+                                    26, 26, 0, 0, 1, 1,
+                                    reset_windows_hot ? fmk::Color{1,1,0.75f,1}
+                                                      : fmk::Color{1,1,1,1});
+                const int icon_lock_texture = icon_positions_locked
+                    ? g_lock_texture : g_unlock_texture;
+                if (icon_lock_texture >= 1)
+                    fmk::draw_image(icon_lock_texture, icon_lock_x, panel_y + 4.0f,
+                                    26, 26, 0, 0, 1, 1,
+                                    icon_lock_hot ? fmk::Color{1,1,0.75f,1}
+                                                  : fmk::Color{1,1,1,1});
+                if (reset_icons_hot)
+                    icon_tooltip = "Reinitialiser la position des icones";
+                else if (reset_windows_hot)
+                    icon_tooltip = "Reinitialiser les fenetres";
+                else if (icon_lock_hot)
+                    icon_tooltip = icon_positions_locked
+                        ? "Deverrouiller la position des icones"
+                        : "Verrouiller la position des icones";
                 fmk::draw_text(panel_x + 20.0f, panel_y + 42.0f, 15.0f,
                                {0.65f, 0.75f, 0.82f, 1.0f},
                                "Activer un mod affiche son icone");
@@ -768,6 +981,8 @@ DWORD WINAPI overlay_worker(void*) {
                         const bool changed = g_plugins->set_enabled(status.manifest.id, desired);
                         plugin_open[status.manifest.id] = desired &&
                             status.manifest.id == "patobeur.bossrun";
+                        if (status.manifest.id == "patobeur.bossrun")
+                            bossrun_history_open = desired;
                         state_dirty = true;
                         log_line("ui: module %s %s (%s)", status.manifest.id.c_str(),
                                  desired ? "activation" : "desactivation",
@@ -778,32 +993,49 @@ DWORD WINAPI overlay_worker(void*) {
                     }
                     y += row_height;
                 }
-                if (can_scroll) {
-                    const float footer_y = panel_y + panel_height - 31.0f;
-                    const bool hot_up = in_rect(panel_x + 382.0f, footer_y, 96.0f, 26.0f);
-                    const bool hot_down = in_rect(panel_x + 492.0f, footer_y, 96.0f, 26.0f);
-                    button(panel_x + 382.0f, footer_y, 96.0f, "Haut", hot_up,
-                           {0.20f, 0.28f, 0.36f, 1.0f});
-                    button(panel_x + 492.0f, footer_y, 96.0f, "Bas", hot_down,
-                           {0.20f, 0.28f, 0.36f, 1.0f});
-                    const std::string page = std::to_string(module_scroll + 1) + "-" +
-                        std::to_string(list_end) + " / " + std::to_string(ordered_statuses.size());
-                    fmk::draw_text(panel_x + 20.0f, footer_y + 5.0f, 14.0f,
-                                   {0.65f, 0.75f, 0.82f, 1.0f}, page.c_str());
-                    if (clicked && dragging.empty() && hot_up && module_scroll > 0) {
-                        --module_scroll; state_dirty = true;
+                if (can_scroll && !ordered_statuses.empty()) {
+                    const float track_x = panel_x + panel_width - 12.0f;
+                    const float track_y = panel_y + 70.0f;
+                    const float track_h = std::max(30.0f, panel_height - 80.0f);
+                    const float visible_ratio = std::min(1.0f,
+                        (float)visible_modules / (float)ordered_statuses.size());
+                    const float thumb_h = std::max(30.0f, track_h * visible_ratio);
+                    const float scroll_ratio = max_scroll > 0
+                        ? (float)module_scroll / (float)max_scroll : 0.0f;
+                    float thumb_y = track_y + (track_h - thumb_h) * scroll_ratio;
+                    const bool thumb_hot = in_rect(track_x, thumb_y, 8.0f, thumb_h);
+                    const bool track_hot = in_rect(track_x, track_y, 8.0f, track_h);
+                    if (clicked && dragging.empty() && thumb_hot) {
+                        dragging = "$manager-scroll";
+                        drag_dy = (float)cursor.y - thumb_y;
+                    } else if (clicked && dragging.empty() && track_hot) {
+                        const float ratio = std::clamp(
+                            ((float)cursor.y - track_y - thumb_h * 0.5f) /
+                                std::max(1.0f, track_h - thumb_h), 0.0f, 1.0f);
+                        module_scroll = (std::size_t)std::lround(ratio * max_scroll);
+                        state_dirty = true;
                     }
-                    if (clicked && dragging.empty() && hot_down && module_scroll < max_scroll) {
-                        ++module_scroll; state_dirty = true;
+                    if (click_down && cursor_valid && dragging == "$manager-scroll") {
+                        const float ratio = std::clamp(
+                            ((float)cursor.y - drag_dy - track_y) /
+                                std::max(1.0f, track_h - thumb_h), 0.0f, 1.0f);
+                        module_scroll = (std::size_t)std::lround(ratio * max_scroll);
                     }
+                    const float live_ratio = max_scroll > 0
+                        ? (float)module_scroll / (float)max_scroll : 0.0f;
+                    thumb_y = track_y + (track_h - thumb_h) * live_ratio;
+                    fmk::draw_rect(track_x, track_y, 8.0f, track_h,
+                                   {0.08f,0.12f,0.15f,0.95f});
+                    fmk::draw_rect(track_x, thumb_y, 8.0f, thumb_h,
+                                   thumb_hot ? fmk::Color{0.40f,0.78f,0.88f,1.0f}
+                                             : fmk::Color{0.24f,0.50f,0.60f,1.0f});
                 }
             }
-
-            if (!plugin_open["blaakan.inventory"] && atlas_input_open) {
+            if ((!world_available || !plugin_open["blaakan.inventory"]) && atlas_input_open) {
                 fmk::input_set_visible(false);
                 atlas_input_open = false;
             }
-            fmk::input_set_wheel_rect(0, 0, 0, 0);
+            if (!manager_open) fmk::input_set_wheel_rect(0, 0, 0, 0);
             std::size_t window_index = 0;
             for (const auto& status : statuses) {
                 if (!status.enabled || (status.manifest.requires_game_world && !world_available) ||
@@ -871,21 +1103,36 @@ DWORD WINAPI overlay_worker(void*) {
                         }
                     }
                 }
-                const float plugin_width = bossrun_window ? 400.0f
+                const float default_width = bossrun_window ? 400.0f
                     : (console_window ? 720.0f : 470.0f);
-                const float plugin_height = bossrun_window
+                const float default_height = bossrun_window
                     ? (bossrun_has_stats ? 190.0f : 166.0f)
                     : (console_window ? 430.0f
                                       : 58.0f + (float)rendered.size() * 24.0f);
+                if (pos.w <= 0.0f) pos.w = default_width;
+                if (pos.h <= 0.0f) pos.h = default_height;
+                const float min_width = bossrun_window ? 320.0f
+                    : (console_window ? 420.0f : 280.0f);
+                const float min_height = bossrun_window ? 166.0f
+                    : (console_window ? 180.0f : 90.0f);
+                pos.w = std::clamp(pos.w, min_width, width - pos.x);
+                pos.h = std::clamp(pos.h, min_height, height - pos.y);
+                const float plugin_width = pos.w;
+                const float plugin_height = pos.h;
                 const bool bossrun_toggle_hot = false;
                 const float plugin_close_x = pos.x + plugin_width - 30.0f;
                 const float plugin_close_y = pos.y + 6.0f;
                 const bool plugin_close_hot = in_rect(plugin_close_x, plugin_close_y, 22.0f, 22.0f);
+                const bool resize_hot = in_rect(pos.x + plugin_width - 20.0f,
+                                                pos.y + plugin_height - 20.0f,
+                                                20.0f, 20.0f);
                 if (clicked && dragging.empty() && plugin_close_hot) {
                     plugin_open[status.manifest.id] = false;
                     state_dirty = true;
+                } else if (clicked && dragging.empty() && resize_hot) {
+                    start_resize(status.manifest.id, plugin_width, plugin_height);
                 }
-                if (clicked && dragging.empty() && !plugin_close_hot &&
+                if (clicked && dragging.empty() && !plugin_close_hot && !resize_hot &&
                     in_rect(pos.x, pos.y, plugin_width, 34.0f) &&
                     !bossrun_toggle_hot)
                     start_drag(status.manifest.id, pos.x, pos.y);
@@ -894,23 +1141,24 @@ DWORD WINAPI overlay_worker(void*) {
                     pos.y = (float)cursor.y - drag_dy;
                     clamp_window(pos.x, pos.y, plugin_width, plugin_height);
                 }
-                fmk::draw_rect(pos.x, pos.y, plugin_width, plugin_height,
-                               {0.04f, 0.07f, 0.09f, 0.94f});
-                fmk::draw_rect(pos.x, pos.y, plugin_width, 34.0f,
-                               {0.10f, 0.18f, 0.23f, 0.98f});
-                fmk::draw_rect_outline(pos.x, pos.y, plugin_width, plugin_height, 2.0f,
-                                       {0.30f, 0.80f, 0.70f, 1.0f});
-                fmk::draw_text(pos.x + 14.0f, pos.y + 8.0f, 18.0f,
-                               {1.0f, 1.0f, 1.0f, 1.0f}, status.manifest.name.c_str());                if (g_close_icon_texture >= 1)
-                    fmk::draw_image(g_close_icon_texture, plugin_close_x, plugin_close_y,
-                                    22, 22, 0, 0, 1, 1,
-                                    plugin_close_hot
-                                        ? fmk::Color{1.0f,0.72f,0.72f,1.0f}
-                                        : fmk::Color{1.0f,1.0f,1.0f,1.0f});
-                else
-                    fmk::draw_text(plugin_close_x + 5, plugin_close_y + 1, 16,
-                                   {1,1,1,1}, "x");
-                if (clicked && plugin_close_hot) {
+                if (click_down && cursor_valid &&
+                    dragging == "%" + status.manifest.id) {
+                    pos.w = std::max(min_width,
+                        resize_origin_w + (float)cursor.x - drag_dx);
+                    pos.h = std::max(min_height,
+                        resize_origin_h + (float)cursor.y - drag_dy);
+                    pos.w = std::min(pos.w, width - pos.x);
+                    pos.h = std::min(pos.h, height - pos.y);
+                }                const auto title_icon_it = g_module_icon_textures.find(status.manifest.id);
+                const int title_icon = title_icon_it != g_module_icon_textures.end()
+                    ? title_icon_it->second : -1;
+                const auto frame = fmk::draw_window_frame(
+                    {pos.x, pos.y, plugin_width, plugin_height,
+                     status.manifest.name.c_str(), title_icon,
+                     g_close_icon_texture, 34.0f,
+                     {0.04f,0.07f,0.09f,0.94f}, {0.10f,0.18f,0.23f,0.98f},
+                     {0.30f,0.80f,0.70f,1.0f}, true, g_resize_icon_texture},
+                    {cursor_valid, (float)cursor.x, (float)cursor.y, clicked});                if (clicked && plugin_close_hot) {
                     ++window_index;
                     continue;
                 }
@@ -970,7 +1218,8 @@ DWORD WINAPI overlay_worker(void*) {
                     fmk::draw_text(pos.x + (plugin_width - counts_w) * 0.5f, footer_y,
                                    13.0f, {0.55f,0.65f,0.70f,1.0f}, counts.c_str());
                 } else if (console_window) {
-                    constexpr std::size_t visible_lines = 17;
+                    const std::size_t visible_lines = (std::size_t)std::max(
+                        1.0f, std::floor((plugin_height - 73.0f) / 21.0f));
                     static std::size_t console_back = 0;
                     static std::size_t console_last_count = 0;
                     if (rendered.size() != console_last_count && console_back == 0)
@@ -1005,7 +1254,9 @@ DWORD WINAPI overlay_worker(void*) {
                     }
                     const std::string scroll_info = std::to_string(first_line + (rendered.empty()?0:1)) +
                         "-" + std::to_string(end_line) + " / " + std::to_string(rendered.size());
-                    fmk::draw_text(pos.x + plugin_width - 112, pos.y + 10, 13.0f,
+                    const float scroll_w = fmk::measure_text(13.0f, scroll_info.c_str());
+                    const float scroll_x = plugin_close_x - 10.0f - scroll_w;
+                    fmk::draw_text(scroll_x, pos.y + 10, 13.0f,
                                    {0.68f,0.76f,0.82f,1.0f}, scroll_info.c_str());
                 } else {
                     float text_y = pos.y + 42.0f;
@@ -1017,6 +1268,77 @@ DWORD WINAPI overlay_worker(void*) {
                 }
                 ++window_index;
             }
+            // Independent companion window for the saved BossRun history.
+            bool bossrun_enabled = false;
+            for (const auto& status : statuses) {
+                if (status.manifest.id == "patobeur.bossrun") {
+                    bossrun_enabled = status.enabled;
+                    break;
+                }
+            }
+            if (bossrun_enabled && world_available && bossrun_history_open) {
+                if (bossrun_history_window.w <= 0.0f) bossrun_history_window.w = 400.0f;
+                if (bossrun_history_window.h <= 0.0f) bossrun_history_window.h = 110.0f;
+                const float history_w = bossrun_history_window.w;
+                const float history_h = bossrun_history_window.h;
+                const auto main_it = plugin_windows.find("patobeur.bossrun");
+                if (!bossrun_history_moved && main_it != plugin_windows.end()) {
+                    bossrun_history_window.x = main_it->second.x + 412.0f;
+                    bossrun_history_window.y = main_it->second.y;
+                    clamp_window(bossrun_history_window.x, bossrun_history_window.y,
+                                 history_w, history_h);
+                }
+                bossrun_history_initialized = true;
+                const float hx = bossrun_history_window.x;
+                const float hy = bossrun_history_window.y;
+                const float close_x = hx + history_w - 30.0f;
+                const float close_y = hy + 6.0f;
+                const bool close_hot = in_rect(close_x, close_y, 22.0f, 22.0f);
+                const bool history_resize_hot = in_rect(hx + history_w - 20.0f,
+                                                        hy + history_h - 20.0f,
+                                                        20.0f, 20.0f);
+                if (clicked && dragging.empty() && close_hot) {
+                    bossrun_history_open = false;
+                    state_dirty = true;
+                } else if (clicked && dragging.empty() && history_resize_hot) {
+                    start_resize("bossrun-history", history_w, history_h);
+                } else if (clicked && dragging.empty() &&
+                           in_rect(hx, hy, history_w, 34.0f)) {
+                    start_drag("#bossrun-history", hx, hy);
+                }
+                if (click_down && cursor_valid && dragging == "%bossrun-history") {
+                    bossrun_history_window.w = std::max(280.0f,
+                        resize_origin_w + (float)cursor.x - drag_dx);
+                    bossrun_history_window.h = std::max(80.0f,
+                        resize_origin_h + (float)cursor.y - drag_dy);
+                    bossrun_history_window.w = std::min(bossrun_history_window.w,
+                                                        width - bossrun_history_window.x);
+                    bossrun_history_window.h = std::min(bossrun_history_window.h,
+                                                        height - bossrun_history_window.y);
+                }
+                if (click_down && cursor_valid && dragging == "#bossrun-history") {
+                    const float nx = (float)cursor.x - drag_dx;
+                    const float ny = (float)cursor.y - drag_dy;
+                    if (std::abs(nx - bossrun_history_window.x) > 2.0f ||
+                        std::abs(ny - bossrun_history_window.y) > 2.0f)
+                        bossrun_history_moved = true;
+                    bossrun_history_window.x = nx;
+                    bossrun_history_window.y = ny;
+                    clamp_window(bossrun_history_window.x, bossrun_history_window.y,
+                                 history_w, history_h);
+                }
+                const auto history_icon_it =
+                    g_module_icon_textures.find("patobeur.bossrun");
+                const int history_icon = history_icon_it != g_module_icon_textures.end()
+                    ? history_icon_it->second : -1;
+                fmk::draw_window_frame(
+                    {bossrun_history_window.x, bossrun_history_window.y,
+                     history_w, history_h, "Derniers temps", history_icon,
+                     g_close_icon_texture, 34.0f,
+                     {0.04f,0.07f,0.09f,0.94f}, {0.10f,0.18f,0.23f,0.98f},
+                     {0.30f,0.80f,0.70f,1.0f}, true, g_resize_icon_texture},
+                    {cursor_valid, (float)cursor.x, (float)cursor.y, clicked});            }
+
             (void)window_index;
             if (!icon_tooltip.empty() && cursor_valid && dragging.empty()) {
                 constexpr float tip_font = 15.0f;

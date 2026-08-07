@@ -41,6 +41,7 @@ namespace fmk {
         };
 
         void render_bossrun(Context& ctx, const fmk::PluginStatus& status, const std::vector<std::string>& rendered);
+        void render_bossrun_history(Context& ctx, const std::vector<std::string>& rendered);
         void render_map(Context& ctx, const fmk::PluginStatus& status, const std::vector<std::string>& rendered);
         void render_report(Context& ctx, const fmk::PluginStatus& status, const std::vector<std::string>& rendered);
         void render_console(Context& ctx, const fmk::PluginStatus& status, const std::vector<std::string>& rendered);

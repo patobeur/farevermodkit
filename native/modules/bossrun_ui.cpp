@@ -1,7 +1,19 @@
 #include "ui_modules.h"
+#include <cstdlib>
+#include <cmath>
+#include <string>
+#include <vector>
 
 namespace fmk {
 namespace ui {
+
+struct HistoryEntry {
+    std::string name;
+    std::string level_class;
+    long long ms;
+    bool is_best;
+    std::string date;
+};
 
 void render_bossrun(Context& ctx, const fmk::PluginStatus& status, const std::vector<std::string>& rendered) {
     bool bossrun_has_stats = false;
@@ -13,6 +25,7 @@ void render_bossrun(Context& ctx, const fmk::PluginStatus& status, const std::ve
     std::string last_value, average_value, kills_value = "0", wipes_value = "0";
     std::string stats_text, counts_text;
     bool has_stats_text = false, has_counts_text = false;
+    std::vector<HistoryEntry> history;
     
     for (const auto& line : rendered) {
         if (line.rfind("DETECTED|", 0) == 0) {
@@ -50,6 +63,19 @@ void render_bossrun(Context& ctx, const fmk::PluginStatus& status, const std::ve
             if (sep != std::string::npos) {
                 kills_value = line.substr(7, sep - 7);
                 wipes_value = line.substr(sep + 1);
+            }
+        } else if (line.rfind("HISTORY|", 0) == 0) {
+            std::string rem = line.substr(8);
+            std::size_t sep1 = rem.find('|');
+            std::size_t sep2 = sep1 != std::string::npos ? rem.find('|', sep1 + 1) : std::string::npos;
+            std::size_t sep3 = sep2 != std::string::npos ? rem.find('|', sep2 + 1) : std::string::npos;
+            if (sep3 != std::string::npos) {
+                HistoryEntry e;
+                e.name = rem.substr(0, sep1);
+                e.level_class = rem.substr(sep1 + 1, sep2 - sep1 - 1);
+                e.ms = std::strtoll(rem.substr(sep2 + 1, sep3 - sep2 - 1).c_str(), nullptr, 10);
+                e.is_best = rem.substr(sep3 + 1) == "1";
+                history.push_back(e);
             }
         }
     }
@@ -111,6 +137,72 @@ void render_bossrun(Context& ctx, const fmk::PluginStatus& status, const std::ve
     const float counts_w = fmk::measure_text(13.0f, counts.c_str());
     fmk::draw_text(ctx.x + (ctx.w - counts_w) * 0.5f, footer_y,
                    13.0f, {0.55f,0.65f,0.70f,1.0f}, counts.c_str());
+}
+
+void render_bossrun_history(Context& ctx, const std::vector<std::string>& rendered) {
+    std::vector<HistoryEntry> history;
+    for (const auto& line : rendered) {
+        if (line.rfind("HISTORY|", 0) == 0) {
+            std::string rem = line.substr(8);
+            std::size_t sep1 = rem.find('|');
+            std::size_t sep2 = sep1 != std::string::npos ? rem.find('|', sep1 + 1) : std::string::npos;
+            std::size_t sep3 = sep2 != std::string::npos ? rem.find('|', sep2 + 1) : std::string::npos;
+            std::size_t sep4 = sep3 != std::string::npos ? rem.find('|', sep3 + 1) : std::string::npos;
+            if (sep4 != std::string::npos) {
+                HistoryEntry e;
+                e.name = rem.substr(0, sep1);
+                e.level_class = rem.substr(sep1 + 1, sep2 - sep1 - 1);
+                e.ms = std::strtoll(rem.substr(sep2 + 1, sep3 - sep2 - 1).c_str(), nullptr, 10);
+                e.is_best = rem.substr(sep3 + 1, sep4 - sep3 - 1) == "1";
+                e.date = rem.substr(sep4 + 1);
+                history.push_back(e);
+            }
+        }
+    }
+                   
+    if (!history.empty()) {
+        float list_y = ctx.y + 42.0f;
+        
+        long long max_ms = 1;
+        for (const auto& e : history) {
+            if (e.ms > max_ms) max_ms = e.ms;
+        }
+
+        const float col_width = ctx.w - 32.0f;
+        for (std::size_t i = 0; i < history.size(); ++i) {
+            const auto& e = history[i];
+            const float item_x = ctx.x + 16.0f;
+            const float item_y = list_y + i * 26.0f;
+            
+            // Right text (Time + Date)
+            char right_buf[128];
+            long long s = e.ms / 1000;
+            std::snprintf(right_buf, sizeof(right_buf), "%02lld:%02lld - %s", (s % 3600) / 60, s % 60, e.date.c_str());
+            const fmk::Color time_col = e.is_best ? fmk::Color{0.9f, 0.8f, 0.2f, 1.0f} : fmk::Color{0.6f, 0.65f, 0.7f, 1.0f};
+            const float right_w = fmk::measure_text(13.0f, right_buf);
+            
+            // Name / Level
+            std::string label = e.name;
+            if (!e.level_class.empty()) label += " (" + e.level_class + ")";
+            float max_label_w = col_width - right_w - 10.0f;
+            if (fmk::measure_text(13.0f, label.c_str()) > max_label_w) {
+                while (label.size() > 3 && fmk::measure_text(13.0f, (label + "...").c_str()) > max_label_w) {
+                    label.pop_back();
+                }
+                label += "...";
+            }
+            fmk::draw_text(item_x, item_y, 13.0f, {0.8f, 0.85f, 0.9f, 1.0f}, label.c_str());
+            
+            fmk::draw_text(item_x + col_width - right_w, item_y, 13.0f, time_col, right_buf);
+            
+            // Progress bar
+            const float bar_w = col_width;
+            fmk::draw_rect(item_x, item_y + 16.0f, bar_w, 3.0f, {0.15f, 0.18f, 0.22f, 1.0f});
+            const float fill_w = bar_w * (static_cast<float>(e.ms) / max_ms);
+            const fmk::Color fill_col = e.is_best ? fmk::Color{0.7f, 0.6f, 0.1f, 1.0f} : fmk::Color{0.3f, 0.4f, 0.5f, 1.0f};
+            fmk::draw_rect(item_x, item_y + 16.0f, fill_w, 3.0f, fill_col);
+        }
+    }
 }
 
 } // namespace ui

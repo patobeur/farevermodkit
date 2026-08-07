@@ -8,7 +8,7 @@ local boss_is_boss = false
 local function label(b)
     if b.kind and b.kind ~= "" then return b.kind end
     if b.runtimeClass and b.runtimeClass ~= "" then return b.runtimeClass end
-    return "aucun"
+    return i18n("unknown_boss")
 end
 
 local function clock(ms)
@@ -23,7 +23,7 @@ function on_init() running, finished = false, false end
 local function render_bossrun()
     local b = farever.boss()
     if not b then
-        local detected = (running or finished) and boss_id or "aucun"
+        local detected = (running or finished) and boss_id or i18n("unknown_boss")
         local state = running and "running" or (finished and "finished" or "idle")
         local shown = running and elapsed_ms or (finished and last_ms or 0)
         imgui.text("DETECTED|" .. detected .. "|" .. boss_class .. "|" ..
@@ -70,7 +70,7 @@ local function render_bossrun()
         elapsed_ms = 0
     end
 
-    local detected, detected_class = "aucun", ""
+    local detected, detected_class = i18n("unknown_boss"), ""
     if b.present or b.defeated then
         detected, detected_class = label(b), b.runtimeClass or ""
     elseif running or finished then
@@ -84,9 +84,9 @@ local function render_bossrun()
     local shown_ms = running and elapsed_ms or (finished and last_ms or 0)
     imgui.text("TIMER|" .. timer_state .. "|" .. clock(shown_ms))
     if kills > 0 then
-        imgui.text("STATS|" .. clock(last_ms) .. "|" .. clock(total_ms / kills))
+        imgui.text("STATS_TEXT|" .. i18n("last") .. " " .. clock(last_ms) .. "    " .. i18n("average") .. " " .. clock(total_ms / kills))
     end
-    imgui.text("COUNTS|" .. kills .. "|" .. wipes)
+    imgui.text("COUNTS_TEXT|" .. i18n("kills") .. " " .. kills .. "    " .. i18n("wipes") .. " " .. wipes)
 end
 
 function on_render()

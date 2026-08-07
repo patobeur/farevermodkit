@@ -16,6 +16,7 @@ struct PluginManifest {
     std::string default_language;
     bool enabled_by_default = true;
     bool requires_game_world = false;
+    std::vector<std::string> dependencies;
     std::filesystem::path directory;
     std::string error;
     bool valid = false;

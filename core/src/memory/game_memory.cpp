@@ -231,6 +231,32 @@ bool GameMemory::read_hero_pose(double* x, double* y, double* z, double* rot_z) 
     return reader_read_hero_pose(x, y, z, rot_z);
 }
 
+bool GameMemory::read_nearby_entities(double radius, std::vector<NearbyEntity>* out) {
+    if (!out || radius <= 0 || radius > 2000) return false;
+    std::lock_guard lock(mutex_);
+    if (!status_.in_world) return false;
+    mem_flush_cache();
+    return reader_read_nearby_entities(radius, out);
+}
+
+bool GameMemory::read_world_name(std::string* out) {
+    if (!out) return false;
+    std::lock_guard lock(mutex_);
+    if (!status_.in_world) return false;
+    mem_flush_cache();
+    return reader_read_world_name(out);
+}
+
+void GameMemory::update_map_snapshot(const MapSnapshot& snapshot) {
+    std::lock_guard lock(mutex_);
+    map_snapshot_ = snapshot;
+}
+
+MapSnapshot GameMemory::map_snapshot() const {
+    std::lock_guard lock(mutex_);
+    return map_snapshot_;
+}
+
 bool GameMemory::read_camera(double* px, double* py, double* pz,
                              double* tx, double* ty, double* tz) {
     if (!px || !py || !pz || !tx || !ty || !tz) return false;

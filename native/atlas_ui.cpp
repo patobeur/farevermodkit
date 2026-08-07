@@ -1759,7 +1759,7 @@ void atlas_ui_update(const Collection& c, const Inventories& inv,
     // opened is still waiting for your Mage, so pooling them would hide
     // places that are genuinely still there.
     for (const auto& id : done.done) snap->done_sources.insert(id);
-    // Archive creation belongs to an optional Patobeur module, never Atlas.
+    // Archive creation belongs to an optional module, never Atlas.
     if (save_to_disk) {
         if (c.valid && !inv.steam_account_id.empty())
             write_collection_json(c, inv.steam_account_id);
@@ -2012,7 +2012,7 @@ void atlas_ui_draw(float screen_w, float screen_h) {
         {wx, wy, win_w, win_h, "Collection Atlas", g_title_texture,
          g_close_texture, kTitleH, kBg, kBgTitle, kEdge, true, g_resize_texture},
         {true, (float)in.mouse_x, (float)in.mouse_y, clicked});
-    if (false) { // Export controls belong to the optional Patobeur module.
+    if (false) { // Export controls belong to an optional module.
     LONG save_state = InterlockedCompareExchange(&g_save_state, 0, 0);
     if (save_state == 2 && GetTickCount() -
             (DWORD)InterlockedCompareExchange(&g_save_tick, 0, 0) > 2500) {

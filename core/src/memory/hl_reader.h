@@ -24,6 +24,14 @@ struct Collection {
     int32_t bank_slots = 0;
 };
 
+struct NearbyEntity {
+    double x = 0, y = 0, z = 0;
+    std::string kind;
+    std::string runtime_class;
+    bool is_player = false;
+    bool is_boss = false;
+};
+
 struct UnitState {
     bool valid = false;
     bool in_combat = false;
@@ -243,6 +251,8 @@ bool reader_map_pick(int client_x, int client_y, float client_w, float client_h,
 // and arrow readout. Cheap (four validated qword reads), safe to call at
 // 20Hz from the pose thread.
 bool reader_read_hero_pose(double* x, double* y, double* z, double* rot_z);
+bool reader_read_nearby_entities(double radius, std::vector<NearbyEntity>* out);
+bool reader_read_world_name(std::string* out);
 
 // True while a loading screen is up. `GameApp.get_isLoading` is literally
 // `loadingState != 10` (src/GameApp.hx:50), so this is one int off the app

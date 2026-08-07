@@ -36,6 +36,8 @@ public:
 
     const std::vector<PluginStatus>& statuses() const { return statuses_; }
     std::vector<std::string> rendered_text(const std::string& id) const;
+    std::vector<DrawCommand> draw_commands(const std::string& id) const;
+    std::pair<float, float> canvas_size(const std::string& id) const;
 
     // Central read-only game-state gateway for modules and future Lua bindings.
     GameMemory& memory() { return memory_; }

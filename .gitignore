@@ -11,6 +11,7 @@ updates/
 *.tmp
 farever-modkit.ini
 farevermodkit-ui.json
+*.bat
 
 # IDE / OS
 .vs/
@@ -33,3 +34,6 @@ Thumbs.db
 assets/atlas/farever-atlas-icons.dds
 assets/atlas/farever-atlas-icons.png
 tools/out/
+
+# Generated locally from the player game installation
+modules/Patobeur/Map/assets/maps/

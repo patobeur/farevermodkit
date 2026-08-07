@@ -1,6 +1,6 @@
 # Report
 
-Module `patobeur.report` créé par **Patobeur** pour générer un rapport HTML local, classé par compte puis par personnage.
+Module `patobeur.report` pour générer un rapport HTML local, classé par compte puis par personnage.
 
 Cette adaptation reprend l’idée et la présentation du rapport du projet **farever-mods** de Blaakan. Merci à Blaakan et aux autres contributeurs cités dans les crédits du projet.
 
@@ -8,6 +8,9 @@ Cette adaptation reprend l’idée et la présentation du rapport du projet **fa
 
 - Le module est désactivé par défaut et doit être activé depuis la fenêtre FMK.
 - Le module attend qu’un personnage soit réellement détecté dans le monde.
+- Une première sauvegarde est demandée automatiquement à la détection d’un nouveau personnage.
+- Le bouton **Sauvegarder maintenant** force une nouvelle écriture et la fenêtre indique le temps écoulé depuis la dernière sauvegarde réussie.
+- Le bouton **Ouvrir le rapport** ouvre directement le fichier HTML local.
 - Il appelle uniquement l’API publique `farever.report_generate()`.
 - La demande est traitée sur le worker mémoire existant, jamais dans le rendu DX12.
 - Les instantanés JSON sont écrits sous `%LOCALAPPDATA%\farevermodkit\data\accounts\<compte>\characters\<personnage>`.

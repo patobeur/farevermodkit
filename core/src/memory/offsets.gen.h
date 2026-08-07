@@ -66,14 +66,20 @@ namespace ent_GameObject {
 // GameApp  (sizeof=320, extends App)
 namespace GameApp {
     constexpr uint32_t SIZEOF = 320;
+    constexpr uint32_t world = 0x98;  // OBJ : world.World
     constexpr uint32_t gameCamera = 0xb0;  // OBJ : client.GameCamera
     constexpr uint32_t camera = 0xa8;  // OBJ : client.BaseCamera
     constexpr uint32_t hero = 0xd0;  // OBJ : ent.Hero
-    constexpr uint32_t world = 0x98;  // OBJ : world.World
+
     constexpr uint32_t gui = 0xa0;  // OBJ : ui.GameUI
     constexpr uint32_t loadingState = 0xf8;  // I32
     constexpr uint32_t layer = 0xe0;  // OBJ : st.GameLayer
 }  // namespace GameApp
+
+// world.World  (fields validated from hlboot.dat)
+namespace world_World {
+    constexpr uint32_t level = 0xb8;  // OBJ : String
+}  // namespace world_World
 
 // ui.GameUI  (sizeof=296, extends ui.BaseUI)
 namespace ui_GameUI {

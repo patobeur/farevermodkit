@@ -23,8 +23,11 @@
 // ---------------------------------------------------------------------------
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
+#include <algorithm>
 #include <d3d12.h>
+#include <cmath>
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <wincodec.h>
@@ -135,8 +138,13 @@ std::vector<Vertex> g_verts;
 struct DrawSeg {
     int  tex;
     UINT start, count;
+    LONG clip_left = 0;
+    LONG clip_top = 0;
+    LONG clip_right = LONG_MAX;
+    LONG clip_bottom = LONG_MAX;
 };
 std::vector<DrawSeg> g_segs;
+D3D12_RECT g_current_clip{0, 0, LONG_MAX, LONG_MAX};
 
 using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
 PresentFn g_present_orig = nullptr;
@@ -607,13 +615,15 @@ static void push_quad(int tex, float x, float y, float w, float h,
     if (g_verts.size() + 6 > kMaxVerts) return;
 
     if (g_segs.empty()) {
-        g_segs.push_back({tex, (UINT)g_verts.size(), 0});
+        g_segs.push_back({tex, (UINT)g_verts.size(), 0, g_current_clip.left, g_current_clip.top, g_current_clip.right, g_current_clip.bottom});
     } else {
         DrawSeg& s = g_segs.back();
-        if (tex >= 0) {
+        if (tex < 0 && s.tex >= 0) {
+            g_segs.push_back({-1, (UINT)g_verts.size(), 0, g_current_clip.left, g_current_clip.top, g_current_clip.right, g_current_clip.bottom});
+        } else if (tex >= 0) {
             if (s.tex < 0) s.tex = tex;
             else if (s.tex != tex)
-                g_segs.push_back({tex, (UINT)g_verts.size(), 0});
+                g_segs.push_back({tex, (UINT)g_verts.size(), 0, g_current_clip.left, g_current_clip.top, g_current_clip.right, g_current_clip.bottom});
         }
     }
 
@@ -624,6 +634,20 @@ static void push_quad(int tex, float x, float y, float w, float h,
     g_verts.push_back(a); g_verts.push_back(b); g_verts.push_back(d);
     g_verts.push_back(b); g_verts.push_back(e); g_verts.push_back(d);
     g_segs.back().count += 6;
+}
+
+void draw_set_clip(float x, float y, float w, float h) {
+    const LONG left = (LONG)std::floor(x);
+    const LONG top = (LONG)std::floor(y);
+    const LONG right = (LONG)std::ceil(x + std::max(0.0f, w));
+    const LONG bottom = (LONG)std::ceil(y + std::max(0.0f, h));
+    g_current_clip = {left, top, right, bottom};
+    g_segs.push_back({-1, (UINT)g_verts.size(), 0, left, top, right, bottom});
+}
+
+void draw_reset_clip() {
+    g_current_clip = {0, 0, LONG_MAX, LONG_MAX};
+    g_segs.push_back({-1, (UINT)g_verts.size(), 0, 0, 0, LONG_MAX, LONG_MAX});
 }
 
 void draw_rect(float x, float y, float w, float h, Color c) {
@@ -637,12 +661,40 @@ void draw_rect_outline(float x, float y, float w, float h, float t, Color c) {
     draw_rect(x + w - t, y + t, t, h - 2 * t, c);
 }
 
+void draw_line(float x1, float y1, float x2, float y2, float thickness, Color c) {
+    const float dx = x2 - x1, dy = y2 - y1;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if (length <= 0.001f) return;
+    const float nx = -dy / length * thickness * 0.5f;
+    const float ny = dx / length * thickness * 0.5f;
+    draw_triangle(x1 + nx, y1 + ny, x2 + nx, y2 + ny,
+                  x1 - nx, y1 - ny, c);
+    draw_triangle(x2 + nx, y2 + ny, x2 - nx, y2 - ny,
+                  x1 - nx, y1 - ny, c);
+}
+
+void draw_circle(float x, float y, float radius, float thickness, Color c, bool filled) {
+    if (radius <= 0.0f) return;
+    constexpr int segments = 48;
+    constexpr float tau = 6.28318530718f;
+    float previous_x = x + radius, previous_y = y;
+    for (int i = 1; i <= segments; ++i) {
+        const float angle = tau * (float)i / (float)segments;
+        const float next_x = x + std::cos(angle) * radius;
+        const float next_y = y + std::sin(angle) * radius;
+        if (filled) draw_triangle(x, y, previous_x, previous_y, next_x, next_y, c);
+        else draw_line(previous_x, previous_y, next_x, next_y, thickness, c);
+        previous_x = next_x; previous_y = next_y;
+    }
+}
+
 // A single solid triangle - the navigator's rotating arrow needs geometry
 // the axis-aligned quads cannot express.
 void draw_triangle(float x0, float y0, float x1, float y1, float x2, float y2,
                    Color c) {
     if (g_verts.size() + 3 > kMaxVerts) return;
-    if (g_segs.empty()) g_segs.push_back({-1, (UINT)g_verts.size(), 0});
+    if (g_segs.empty() || g_segs.back().tex >= 0)
+        g_segs.push_back({-1, (UINT)g_verts.size(), 0, g_current_clip.left, g_current_clip.top, g_current_clip.right, g_current_clip.bottom});
     g_verts.push_back({x0, y0, -1, -1, c.r, c.g, c.b, c.a});
     g_verts.push_back({x1, y1, -1, -1, c.r, c.g, c.b, c.a});
     g_verts.push_back({x2, y2, -1, -1, c.r, c.g, c.b, c.a});
@@ -823,10 +875,10 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* sc, UINT interval,
         --g_present_depth;
         g_failed = true;
         host_log("overlay: recursive Present detected; overlay disabled");
-        // A nested Present is a driver/game re-entry. Returning E_FAIL here
-        // bubbles up as DXERROR 80004005 in Heaps; skip only this nested call
-        // and let the outer Present continue normally.
-        return S_OK;
+        // Let the original swap-chain call complete normally. Returning a
+        // synthetic S_OK can leave the game's present bookkeeping out of sync
+        // and surface as an access violation in DX12Driver.present.
+        return g_present_orig ? g_present_orig(sc, interval, flags) : E_FAIL;
     }
     struct PresentDepthGuard {
         ~PresentDepthGuard() { --g_present_depth; }
@@ -901,6 +953,7 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* sc, UINT interval,
 
     g_verts.clear();
     g_segs.clear();
+    g_current_clip = {0, 0, LONG_MAX, LONG_MAX};
     g_draw(w, h);
     if (g_verts.empty()) return g_present_orig(sc, interval, flags);
 
@@ -953,6 +1006,14 @@ HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* sc, UINT interval,
         g_srv_heap->GetGPUDescriptorHandleForHeapStart();
     for (const DrawSeg& s : g_segs) {
         if (!s.count) continue;
+        D3D12_RECT segment_clip{
+            std::clamp<LONG>(s.clip_left, 0, (LONG)w),
+            std::clamp<LONG>(s.clip_top, 0, (LONG)h),
+            std::clamp<LONG>(s.clip_right, 0, (LONG)w),
+            std::clamp<LONG>(s.clip_bottom, 0, (LONG)h)};
+        if (segment_clip.right <= segment_clip.left ||
+            segment_clip.bottom <= segment_clip.top) continue;
+        g_cmd->RSSetScissorRects(1, &segment_clip);
         D3D12_GPU_DESCRIPTOR_HANDLE hgpu = srv0;
         hgpu.ptr += (UINT64)(s.tex < 0 ? 0 : s.tex) * g_srv_stride;
         g_cmd->SetGraphicsRootDescriptorTable(1, hgpu);

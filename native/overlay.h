@@ -43,8 +43,12 @@ void overlay_set_draw(DrawFn fn);
 bool overlay_frame_size(float* w, float* h);
 
 // --- draw API (valid only inside the draw callback) ------------------------
+void draw_set_clip(float x, float y, float w, float h);
+void draw_reset_clip();
 void draw_rect(float x, float y, float w, float h, Color c);
 void draw_rect_outline(float x, float y, float w, float h, float thickness, Color c);
+void draw_line(float x1, float y1, float x2, float y2, float thickness, Color c);
+void draw_circle(float x, float y, float radius, float thickness, Color c, bool filled = false);
 void draw_triangle(float x0, float y0, float x1, float y1, float x2, float y2,
                    Color c);
 void draw_text(float x, float y, float size, Color c, const char* text);

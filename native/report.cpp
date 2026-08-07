@@ -15,6 +15,7 @@ namespace {
 struct File { std::wstring name; unsigned long long size, time; };
 std::wstring dir(){ return user_data_dir()+L"data\\accounts\\"; }
 std::filesystem::path g_module_dir;
+volatile LONG g_last_saved_tick = 0;
 bool info(const std::wstring&d,const std::wstring&n,File&f){WIN32_FILE_ATTRIBUTE_DATA a{};if(!GetFileAttributesExW((d+n).c_str(),GetFileExInfoStandard,&a))return false;f={n,((unsigned long long)a.nFileSizeHigh<<32)|a.nFileSizeLow,((unsigned long long)a.ftLastWriteTime.dwHighDateTime<<32)|a.ftLastWriteTime.dwLowDateTime};return true;}
 std::vector<File> find(const std::wstring&d,const wchar_t*g){
  std::vector<File> v;
@@ -48,6 +49,9 @@ bool report_install_assets(){
  return !ec;
 }
 void report_open(){ auto p=std::filesystem::path(user_data_dir())/L"html"/L"farever-report.html"; ShellExecuteW(nullptr,L"open",p.c_str(),nullptr,nullptr,SW_SHOWNORMAL); }
+unsigned long report_last_saved_tick() {
+    return static_cast<unsigned long>(InterlockedCompareExchange(&g_last_saved_tick, 0, 0));
+}
 void report_refresh() {
     if (!report_install_assets()) {
         host_log("report: HTML assets unavailable");
@@ -69,7 +73,6 @@ void report_refresh() {
     for (const auto& file : collections) mix(file);
     if (has_atlas) mix(atlas);
     static unsigned long long previous_signature = 0;
-    if (signature == previous_signature) return;
 
     SYSTEMTIME time{};
     GetLocalTime(&time);
@@ -103,6 +106,7 @@ void report_refresh() {
 
     if (write(user_data_dir() + L"farever-report-data.js", output)) {
         previous_signature = signature;
+        InterlockedExchange(&g_last_saved_tick, static_cast<LONG>(GetTickCount()));
         host_log("report: dashboard data updated");
     } else {
         host_log("report: dashboard write failed (%lu)", GetLastError());

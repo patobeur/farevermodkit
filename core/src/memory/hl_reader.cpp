@@ -21,6 +21,7 @@
 #include "offsets.gen.h"
 
 #include <algorithm>
+#include <cmath>
 #include <stdio.h>
 #include <share.h>
 
@@ -1261,6 +1262,63 @@ bool reader_read_hero_pose(double* x, double* y, double* z, double* rot_z) {
            read(hero, off::ent_GameObject::posy, y) &&
            read(hero, off::ent_GameObject::posz, z) &&
            read(hero, off::ent_GameObject::rotationZ, rot_z);
+}
+
+bool reader_read_world_name(std::string* out) {
+    if (!out) return false;
+    out->clear();
+    if (!g_app || !obj_is(g_app, "GameApp")) return false;
+    void* world = read_ptr(g_app, off::GameApp::world);
+    if (!world || !obj_is(world, "world.World")) return false;
+    void* level = read_ptr(world, off::world_World::level);
+    if (!level || obj_class_name(level) != "String") return false;
+    *out = read_hx_string(level);
+    return !out->empty();
+}
+
+bool reader_read_nearby_entities(double radius, std::vector<NearbyEntity>* out) {
+    if (!out) return false;
+    out->clear();
+    void* hero = reader_hero();
+    if (!hero || radius <= 0.0) return false;
+    double hx = 0, hy = 0;
+    if (!read(hero, off::ent_GameObject::posx, &hx) ||
+        !read(hero, off::ent_GameObject::posy, &hy)) return false;
+
+    // st.State.layer is inherited by every live entity. GameLayer.units is
+    // the authoritative bounded list already used by the target reader.
+    void* layer = read_ptr(hero, 0x70);
+    if (!obj_is(layer, "st.GameLayer")) return false;
+    void* units = read_ptr(layer, 0x150);
+    int32_t count = units ? read_i32(units, off::hl_types_ArrayObj::length) : 0;
+    void* varray = units ? read_ptr(units, off::hl_types_ArrayObj::array) : nullptr;
+    const int32_t capacity = varray ? read_i32(varray, hlrt::varray_size) : 0;
+    if (count < 0 || capacity < 0 || count > 4096 || capacity > 4096) return false;
+    if (count > capacity) count = capacity;
+    void* elements = varray ? (uint8_t*)varray + hlrt::varray_data : nullptr;
+    const double radius_sq = radius * radius;
+    for (int32_t i = 0; elements && i < count && out->size() < 512; ++i) {
+        void* unit = read_ptr(elements, (uint32_t)i * 8);
+        if (!unit || unit == hero) continue;
+        const std::string cls = obj_class_name(unit);
+        if (cls.rfind("ent.", 0) != 0) continue;
+        // This array may contain State subclasses that are not spatial game
+        // objects. A complete finite XYZ triple is the validation gate.
+        NearbyEntity entity;
+        if (!read(unit, off::ent_GameObject::posx, &entity.x) ||
+            !read(unit, off::ent_GameObject::posy, &entity.y) ||
+            !read(unit, off::ent_GameObject::posz, &entity.z)) continue;
+        if (!std::isfinite(entity.x) || !std::isfinite(entity.y) ||
+            !std::isfinite(entity.z)) continue;
+        const double dx = entity.x - hx, dy = entity.y - hy;
+        if (dx * dx + dy * dy > radius_sq) continue;
+        entity.runtime_class = cls;
+        entity.kind = read_hx_string(read_ptr(unit, off::ent_Unit::kind));
+        entity.is_player = cls == "ent.Hero";
+        entity.is_boss = cls.rfind("ent.boss.", 0) == 0;
+        out->push_back(std::move(entity));
+    }
+    return true;
 }
 
 bool reader_is_loading() {

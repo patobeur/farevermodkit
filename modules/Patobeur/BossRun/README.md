@@ -1,6 +1,6 @@
 # BossRun
 
-BossRun (`patobeur.bossrun`) est un module créé par **Patobeur** pour chronométrer les combats contre les boss sans dépendre de la langue affichée par Farever.
+BossRun (`patobeur.bossrun`) est un module créé pour chronométrer les combats contre les boss sans dépendre de la langue affichée par Farever.
 
 ## Utilisation
 

@@ -14,7 +14,7 @@ Le prototype est fonctionnel sur le build Farever pris en charge. Il propose :
 - verrouillage des icônes et réinitialisation séparée des icônes et fenêtres ;
 - mode capture avec `F2`, qui masque puis restaure toute l’interface FMK sans bloquer la touche du jeu ;
 - Collection Atlas de Blaakan ;
-- BossRun, Console et Report de Patobeur ;
+- BossRun, Console, Map et Report ;
 - sandbox Lua avec budget d’instructions ;
 - lecture mémoire en worker, sans scan global de secours ;
 - refus des lectures si le hash du build n’est pas reconnu.

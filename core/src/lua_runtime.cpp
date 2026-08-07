@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include <chrono>
+#include <cmath>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -32,10 +33,14 @@ using PushCClosure = void (*)(lua_State*, CFunction, int);
 using PushNil = void (*)(lua_State*);
 using PushBoolean = void (*)(lua_State*, int);
 using PushInteger = void (*)(lua_State*, long long);
+using PushNumber = void (*)(lua_State*, double);
 using PushString = const char* (*)(lua_State*, const char*);
 using ToString = const char* (*)(lua_State*, int, std::size_t*);
+using ToNumber = double (*)(lua_State*, int, int*);
+using ToBoolean = int (*)(lua_State*, int);
 using CreateTable = void (*)(lua_State*, int, int);
 using SetField = void (*)(lua_State*, int, const char*);
+using SetI = void (*)(lua_State*, int, long long);
 using SetGlobal = void (*)(lua_State*, const char*);
 using SetTop = void (*)(lua_State*, int);
 using GetTop = int (*)(lua_State*);
@@ -108,9 +113,13 @@ PushString g_push_string = nullptr;
 PushNil g_push_nil = nullptr;
 PushBoolean g_push_boolean = nullptr;
 PushInteger g_push_integer = nullptr;
+PushNumber g_push_number = nullptr;
 CreateTable g_create_table = nullptr;
 SetField g_set_field = nullptr;
+SetI g_set_i = nullptr;
 ToString g_to_string = nullptr;
+ToNumber g_to_number = nullptr;
+ToBoolean g_to_boolean = nullptr;
 LuaRuntime* g_runtime = nullptr;
 thread_local RaiseError g_raise_error = nullptr;
 thread_local int g_instruction_ticks = 0;
@@ -118,6 +127,81 @@ thread_local int g_instruction_ticks = 0;
 int imgui_text(lua_State* state) {
     const char* text = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
     if (g_runtime && text) g_runtime->capture_text(text);
+    return 0;
+}
+
+float lua_number(lua_State* state, int index, float fallback = 0.0f) {
+    if (!g_to_number) return fallback;
+    int numeric = 0;
+    const double value = g_to_number(state, index, &numeric);
+    return numeric && std::isfinite(value) ? static_cast<float>(value) : fallback;
+}
+
+void read_color(lua_State* state, int first, DrawCommand* command) {
+    command->r = std::clamp(lua_number(state, first, 1.0f), 0.0f, 1.0f);
+    command->g = std::clamp(lua_number(state, first + 1, 1.0f), 0.0f, 1.0f);
+    command->b = std::clamp(lua_number(state, first + 2, 1.0f), 0.0f, 1.0f);
+    command->a = std::clamp(lua_number(state, first + 3, 1.0f), 0.0f, 1.0f);
+}
+
+int ui_canvas(lua_State* state) {
+    const float width = std::clamp(lua_number(state, 1), 1.0f, 4096.0f);
+    const float height = std::clamp(lua_number(state, 2), 1.0f, 4096.0f);
+    if (g_runtime) g_runtime->set_canvas(width, height);
+    return 0;
+}
+
+int ui_draw_circle(lua_State* state) {
+    DrawCommand command;
+    command.type = DrawCommandType::Circle;
+    command.x1 = lua_number(state, 1);
+    command.y1 = lua_number(state, 2);
+    command.radius = std::clamp(lua_number(state, 3), 0.0f, 2000.0f);
+    read_color(state, 4, &command);
+    command.thickness = std::clamp(lua_number(state, 8, 1.0f), 0.5f, 40.0f);
+    command.filled = g_to_boolean && g_to_boolean(state, 9) != 0;
+    if (g_runtime) g_runtime->capture_draw(command);
+    return 0;
+}
+
+int ui_draw_line(lua_State* state) {
+    DrawCommand command;
+    command.type = DrawCommandType::Line;
+    command.x1 = lua_number(state, 1); command.y1 = lua_number(state, 2);
+    command.x2 = lua_number(state, 3); command.y2 = lua_number(state, 4);
+    read_color(state, 5, &command);
+    command.thickness = std::clamp(lua_number(state, 9, 1.0f), 0.5f, 40.0f);
+    if (g_runtime) g_runtime->capture_draw(command);
+    return 0;
+}
+
+int ui_draw_rect(lua_State* state) {
+    DrawCommand command;
+    command.type = DrawCommandType::Rect;
+    command.x1 = lua_number(state, 1); command.y1 = lua_number(state, 2);
+    command.x2 = lua_number(state, 3); command.y2 = lua_number(state, 4);
+    read_color(state, 5, &command);
+    command.filled = g_to_boolean && g_to_boolean(state, 9) != 0;
+    command.thickness = std::clamp(lua_number(state, 10, 1.0f), 0.5f, 40.0f);
+    if (g_runtime) g_runtime->capture_draw(command);
+    return 0;
+}
+
+int ui_draw_image(lua_State* state) {
+    const char* asset = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
+    if (!asset || !*asset) return 0;
+    DrawCommand command;
+    command.type = DrawCommandType::Image;
+    command.asset = asset;
+    command.x1 = lua_number(state, 2); command.y1 = lua_number(state, 3);
+    command.x2 = std::clamp(lua_number(state, 4), 0.0f, 4096.0f);
+    command.y2 = std::clamp(lua_number(state, 5), 0.0f, 4096.0f);
+    read_color(state, 6, &command);
+    command.u0 = std::clamp(lua_number(state, 10, 0.0f), 0.0f, 1.0f);
+    command.v0 = std::clamp(lua_number(state, 11, 0.0f), 0.0f, 1.0f);
+    command.u1 = std::clamp(lua_number(state, 12, 1.0f), 0.0f, 1.0f);
+    command.v1 = std::clamp(lua_number(state, 13, 1.0f), 0.0f, 1.0f);
+    if (g_runtime) g_runtime->capture_draw(command);
     return 0;
 }
 
@@ -130,6 +214,12 @@ void set_bool_field(lua_State* state, const char* name, bool value) {
 void set_integer_field(lua_State* state, const char* name, long long value) {
     if (!g_push_integer || !g_set_field) return;
     g_push_integer(state, value);
+    g_set_field(state, -2, name);
+}
+
+void set_number_field(lua_State* state, const char* name, double value) {
+    if (!g_push_number || !g_set_field) return;
+    g_push_number(state, value);
     g_set_field(state, -2, name);
 }
 
@@ -274,6 +364,52 @@ int farever_bossrun_load(lua_State* state) {
     return 1;
 }
 
+int farever_map_data(lua_State* state) {
+    if (!g_create_table || !g_runtime || !g_runtime->memory_context()) {
+        if (g_push_nil) g_push_nil(state);
+        return 1;
+    }
+    const MapSnapshot map = g_runtime->memory_context()->map_snapshot();
+    if (!map.player_valid) {
+        if (g_push_nil) g_push_nil(state);
+        return 1;
+    }
+    g_create_table(state, 0, 3);
+    set_bool_field(state, "available", true);
+    if (!map.world_name.empty()) set_string_field(state, "world", map.world_name);
+    g_create_table(state, 0, 4);
+    set_number_field(state, "x", map.player_x);
+    set_number_field(state, "y", map.player_y);
+    set_number_field(state, "z", map.player_z);
+    set_number_field(state, "rotation", map.player_rotation);
+    g_set_field(state, -2, "player");
+    if (map.camera_valid) {
+        g_create_table(state, 0, 6);
+        set_number_field(state, "x", map.camera_x);
+        set_number_field(state, "y", map.camera_y);
+        set_number_field(state, "z", map.camera_z);
+        set_number_field(state, "targetX", map.camera_target_x);
+        set_number_field(state, "targetY", map.camera_target_y);
+        set_number_field(state, "targetZ", map.camera_target_z);
+        g_set_field(state, -2, "camera");
+    }
+    g_create_table(state, static_cast<int>(map.entities.size()), 0);
+    for (std::size_t i = 0; i < map.entities.size(); ++i) {
+        const auto& entity = map.entities[i];
+        g_create_table(state, 0, 7);
+        set_number_field(state, "x", entity.x);
+        set_number_field(state, "y", entity.y);
+        set_number_field(state, "z", entity.z);
+        set_string_field(state, "kind", entity.kind);
+        set_string_field(state, "runtimeClass", entity.runtime_class);
+        set_bool_field(state, "isPlayer", entity.is_player);
+        set_bool_field(state, "isBoss", entity.is_boss);
+        g_set_i(state, -2, static_cast<long long>(i + 1));
+    }
+    g_set_field(state, -2, "entities");
+    return 1;
+}
+
 int farever_report_generate(lua_State* state) {
     bool accepted = false;
     if (g_runtime && g_runtime->memory_context()) {
@@ -389,15 +525,19 @@ bool LuaRuntime::install_sandbox() {
     const auto set_field = lua_proc<SetField>(library, "lua_setfield");
     const auto set_global = lua_proc<SetGlobal>(library, "lua_setglobal");
     g_to_string = lua_proc<ToString>(library, "lua_tolstring");
+    g_to_number = lua_proc<ToNumber>(library, "lua_tonumberx");
+    g_to_boolean = lua_proc<ToBoolean>(library, "lua_toboolean");
     g_push_string = lua_proc<PushString>(library, "lua_pushstring");
     g_push_nil = lua_proc<PushNil>(library, "lua_pushnil");
     g_push_boolean = lua_proc<PushBoolean>(library, "lua_pushboolean");
     g_push_integer = lua_proc<PushInteger>(library, "lua_pushinteger");
+    g_push_number = lua_proc<PushNumber>(library, "lua_pushnumber");
     g_create_table = create_table;
     g_set_field = set_field;
-    if (!push_cclosure || !create_table || !set_field || !set_global ||
-        !g_to_string || !g_push_string || !g_push_nil ||
-        !g_push_boolean || !g_push_integer) {
+    g_set_i = lua_proc<SetI>(library, "lua_seti");
+    if (!push_cclosure || !create_table || !set_field || !g_set_i || !set_global ||
+        !g_to_string || !g_to_number || !g_to_boolean || !g_push_string || !g_push_nil ||
+        !g_push_boolean || !g_push_integer || !g_push_number) {
         error_ = "Lua is missing sandbox API exports";
         return false;
     }
@@ -417,6 +557,19 @@ bool LuaRuntime::install_sandbox() {
     set_field((lua_State*)state_, -2, "text");
     set_global((lua_State*)state_, "imgui");
 
+    create_table((lua_State*)state_, 0, 5);
+    push_cclosure((lua_State*)state_, &ui_canvas, 0);
+    set_field((lua_State*)state_, -2, "canvas");
+    push_cclosure((lua_State*)state_, &ui_draw_circle, 0);
+    set_field((lua_State*)state_, -2, "draw_circle");
+    push_cclosure((lua_State*)state_, &ui_draw_line, 0);
+    set_field((lua_State*)state_, -2, "draw_line");
+    push_cclosure((lua_State*)state_, &ui_draw_rect, 0);
+    set_field((lua_State*)state_, -2, "draw_rect");
+    push_cclosure((lua_State*)state_, &ui_draw_image, 0);
+    set_field((lua_State*)state_, -2, "draw_image");
+    set_global((lua_State*)state_, "ui");
+
     push_cclosure((lua_State*)state_, &i18n, 0);
     set_global((lua_State*)state_, "i18n");
 
@@ -432,6 +585,8 @@ bool LuaRuntime::install_sandbox() {
     set_field((lua_State*)state_, -2, "bossrun_load");
     push_cclosure((lua_State*)state_, &farever_bossrun_save, 0);
     set_field((lua_State*)state_, -2, "bossrun_save");
+    push_cclosure((lua_State*)state_, &farever_map_data, 0);
+    set_field((lua_State*)state_, -2, "map_data");
     push_cclosure((lua_State*)state_, &farever_report_generate, 0);
     set_field((lua_State*)state_, -2, "report_generate");
     set_global((lua_State*)state_, "farever");
@@ -642,6 +797,15 @@ std::string LuaRuntime::translate(const std::string& key) const {
 
 void LuaRuntime::capture_text(const char* text) {
     if (text) rendered_text_.emplace_back(text);
+}
+
+void LuaRuntime::capture_draw(const DrawCommand& command) {
+    if (draw_commands_.size() < 2048) draw_commands_.push_back(command);
+}
+
+void LuaRuntime::set_canvas(float width, float height) {
+    canvas_width_ = width;
+    canvas_height_ = height;
 }
 
 bool LuaRuntime::call_callback(const char* name) {

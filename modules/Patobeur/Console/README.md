@@ -1,6 +1,6 @@
 # Console
 
-Console est un module Patobeur qui affiche uniquement les transitions déjà observées par FareverModKit. Il ne fabrique pas de nom d'écran, de zone ou d'instance à partir d'une supposition.
+Console est un module d'affichage qui montre uniquement les transitions déjà observées par FareverModKit. Il ne fabrique pas de nom d'écran, de zone ou d'instance à partir d'une supposition.
 
 ## Événements actuellement disponibles
 

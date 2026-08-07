@@ -10,6 +10,23 @@
 
 namespace fmk {
 
+struct MapSnapshot {
+    bool player_valid = false;
+    double player_x = 0;
+    double player_y = 0;
+    double player_z = 0;
+    double player_rotation = 0;
+    bool camera_valid = false;
+    double camera_x = 0;
+    double camera_y = 0;
+    double camera_z = 0;
+    double camera_target_x = 0;
+    double camera_target_y = 0;
+    double camera_target_z = 0;
+    std::vector<NearbyEntity> entities;
+    std::string world_name;
+};
+
 struct MemoryStatus {
     bool app_found = false;
     bool hero_found = false;
@@ -64,6 +81,10 @@ public:
     bool boss_tracking_enabled(const std::string& kind) const;
     void set_boss_tracking_enabled(const std::string& kind, bool enabled);
     bool read_hero_pose(double* x, double* y, double* z, double* rot_z);
+    bool read_nearby_entities(double radius, std::vector<NearbyEntity>* out);
+    bool read_world_name(std::string* out);
+    void update_map_snapshot(const MapSnapshot& snapshot);
+    MapSnapshot map_snapshot() const;
     // Report generation is requested by Lua and consumed by the existing
     // atlas worker, so no disk export or broad snapshot runs on Present.
     void request_report_export();
@@ -81,6 +102,7 @@ private:
     bool build_validated_ = false;
     uint64_t last_refresh_ms_ = 0;
     MemoryStatus status_{};
+    MapSnapshot map_snapshot_{};
     std::unordered_set<std::string> enabled_extra_kinds_;
     std::atomic<bool> report_export_requested_{false};
 };

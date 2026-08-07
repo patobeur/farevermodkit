@@ -166,6 +166,7 @@ void PluginHost::render() {
             entry.initialized = true;
         }
         entry.runtime->clear_rendered_text();
+        // Diagnostic guard removed.
         if (!entry.runtime->call_callback("on_render")) {
             entry.status.error = entry.runtime->last_error();
             memory_log("plugin %s render error: %s", entry.status.manifest.id.c_str(),
@@ -200,4 +201,18 @@ std::vector<std::string> PluginHost::rendered_text(const std::string& id) const 
     return {};
 }
 
+std::vector<DrawCommand> PluginHost::draw_commands(const std::string& id) const {
+    for (const auto& entry : entries_) {
+        if (entry.status.manifest.id == id && entry.runtime)
+            return entry.runtime->draw_commands();
+    }
+    return {};
+}
+std::pair<float, float> PluginHost::canvas_size(const std::string& id) const {
+    for (const auto& entry : entries_) {
+        if (entry.status.manifest.id == id && entry.runtime)
+            return {entry.runtime->canvas_width(), entry.runtime->canvas_height()};
+    }
+    return {0.0f, 0.0f};
+}
 } // namespace fmk

@@ -27,6 +27,20 @@ bool json_bool(const std::string& text, const char* key, bool fallback) {
     return match[1].str() == "true";
 }
 
+std::vector<std::string> json_array(const std::string& text, const char* key) {
+    const std::regex pattern(std::string("\\\"") + key + "\\\"\\s*:\\s*\\[([^\\]]*)\\]");
+    std::smatch match;
+    std::vector<std::string> items;
+    if (std::regex_search(text, match, pattern)) {
+        const std::string list = match[1].str();
+        const std::regex item_pattern("\\\"([^\\\"]+)\\\"");
+        for (std::sregex_iterator it(list.begin(), list.end(), item_pattern), end; it != end; ++it) {
+            items.push_back((*it)[1].str());
+        }
+    }
+    return items;
+}
+
 bool safe_component(const std::string& value) {
     return !value.empty() && value != "." && value != ".." &&
            value.find("..") == std::string::npos &&
@@ -45,6 +59,13 @@ PluginManifest read_manifest(const std::filesystem::path& path) {
     out.api_version = json_string(text, "apiVersion");
     out.entry = json_string(text, "entry");
     out.default_language = json_string(text, "defaultLanguage");
+    out.dependencies = json_array(text, "dependencies");
+    
+    if (!json_bool(text, "enabled", true)) {
+        out.error = "plugin explicitly disabled in manifest";
+        return out;
+    }
+    
     out.enabled_by_default = json_bool(text, "enabledByDefault", true);
     out.requires_game_world = json_bool(text, "requiresGameWorld", false);
     if (!safe_component(out.id) || !safe_component(out.author) ||
@@ -83,7 +104,11 @@ std::vector<PluginManifest> PluginManager::discover() const {
         for (const auto& mod : std::filesystem::directory_iterator(author.path())) {
             if (!mod.is_directory()) continue;
             const auto manifest = mod.path() / "manifest.json";
-            if (std::filesystem::exists(manifest)) found.push_back(read_manifest(manifest));
+            if (std::filesystem::exists(manifest)) {
+                auto m = read_manifest(manifest);
+                if (m.error == "plugin explicitly disabled in manifest") continue;
+                found.push_back(std::move(m));
+            }
         }
     }
     return found;

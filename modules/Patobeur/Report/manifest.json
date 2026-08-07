@@ -2,8 +2,12 @@
   "id": "patobeur.report",
   "author": "Patobeur",
   "name": "Report",
-  "version": "0.1.0",
-  "apiVersion": "1",
+  "version": "1.0.0",
+  "dependencies": [
+    "blaakan.atlas",
+    "fmk.atlas"
+  ],
+  "apiVersion": "1.0.0",
   "entry": "main.lua",
   "defaultLanguage": "fr-FR",
   "enabledByDefault": false,

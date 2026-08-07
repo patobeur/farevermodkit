@@ -18,8 +18,7 @@ function on_render()
             end
         end
     end
-    imgui.text(status)
-    imgui.text("Dossier : %LOCALAPPDATA%\\farevermodkit\\html")
+    imgui.text("REPORT_STATUS|" .. status)
 end
 
 function on_settings()

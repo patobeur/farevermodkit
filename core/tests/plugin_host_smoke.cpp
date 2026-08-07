@@ -44,18 +44,18 @@ int wmain(int argc, wchar_t** argv) {
         std::cerr << "enable failed\n";
         return 1;
     }
-    if (!host.set_enabled("blaakan.inventory", true)) {
-        std::cerr << "inventory enable failed\n";
+    if (!host.set_enabled("blaakan.atlas", true)) {
+        std::cerr << "blaakan.atlas enable failed\n";
         return 1;
     }
     host.render();
-    const auto inventory_text = host.rendered_text("blaakan.inventory");
+    const auto inventory_text = host.rendered_text("blaakan.atlas");
     if (!inventory_text.empty()) {
         std::cerr << "world-only inventory rendered outside the game\n";
         return 1;
     }
     std::cout << "inventory correctly deferred until a character enters the world\n";
-    host.set_enabled("blaakan.inventory", false);
+    host.set_enabled("blaakan.atlas", false);
     host.shutdown();
     std::cout << "Plugin host smoke test passed\n";
     return 0;

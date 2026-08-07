@@ -27,6 +27,7 @@
 #include "report.h"
 #include "plugin_host.h"
 #include "memory/memory_log.h"
+#include "modules/ui_modules.h"
 
 namespace {
 HMODULE g_real = nullptr;
@@ -213,6 +214,39 @@ NativeConfig read_native_config() {
     return config;
 }
 
+std::string detect_game_locale() {
+    const auto options_path = find_upward("options.ini");
+    if (options_path.empty()) return "en-US";
+    
+    HANDLE h = CreateFileW(options_path.wstring().c_str(), GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return "en-US";
+    char buf[65536] = {};
+    DWORD n = 0;
+    bool ok = ReadFile(h, buf, sizeof(buf) - 1, &n, nullptr);
+    CloseHandle(h);
+    if (!ok) return "en-US";
+    std::string text(buf, n);
+    for (char& c : text) c = (char)tolower((unsigned char)c);
+    size_t pos = 0;
+    while ((pos = text.find("language", pos)) != std::string::npos) {
+        size_t end = text.find('\n', pos);
+        std::string line = text.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
+        if (line.find("fr") != std::string::npos) return "fr-FR";
+        if (line.find("es") != std::string::npos) return "es-ES";
+        if (line.find("de") != std::string::npos) return "de-DE";
+        if (line.find("ru") != std::string::npos) return "ru-RU";
+        if (line.find("zh") != std::string::npos) return "zh-CN";
+        if (line.find("pt") != std::string::npos) return "pt-BR";
+        if (line.find("pl") != std::string::npos) return "pl-PL";
+        if (line.find("ko") != std::string::npos) return "ko-KR";
+        if (line.find("en") != std::string::npos) return "en-US";
+        pos = end;
+    }
+    return "en-US";
+}
+
 void load_plugins() {
     const auto modules = find_upward("farevermodkit/modules");
     const auto lua_dll = find_upward("farevermodkit/third_party/lua/bin/lua54.dll");
@@ -223,7 +257,7 @@ void load_plugins() {
         return;
     }
     g_plugins = std::make_unique<fmk::PluginHost>(modules);
-    if (!g_plugins->load_all(lua_dll, hash, "en-US")) {
+    if (!g_plugins->load_all(lua_dll, hash, detect_game_locale())) {
         log_line("plugins: no module loaded");
     }
     for (const auto& status : g_plugins->statuses()) {
@@ -1152,42 +1186,9 @@ DWORD WINAPI overlay_worker(void*) {
                 const bool report_window = status.manifest.id == "patobeur.report";
                 const bool map_window = status.manifest.id == "patobeur.map";
                 bool bossrun_has_stats = false;
-                std::string detected_kind = "aucun";
-                std::string detected_class;
-                bool detected_is_boss = false;
-                std::string timer_state = "idle";
-                std::string timer_value = "00:00:00";
-                std::string last_value, average_value, kills_value = "0", wipes_value = "0";
                 for (const auto& line : rendered) {
-                    if (line.rfind("DETECTED|", 0) == 0) {
-                        const std::size_t sep = line.find('|', 9);
-                        detected_kind = sep == std::string::npos ? line.substr(9)
-                                                                 : line.substr(9, sep - 9);
-                        if (sep != std::string::npos) {
-                            const std::size_t boss_sep = line.find('|', sep + 1);
-                            detected_class = boss_sep == std::string::npos
-                                ? line.substr(sep + 1)
-                                : line.substr(sep + 1, boss_sep - sep - 1);
-                            detected_is_boss = boss_sep != std::string::npos &&
-                                               line.substr(boss_sep + 1) == "boss";
-                        }
-                    } else if (line.rfind("TIMER|", 0) == 0) {
-                        const std::size_t sep = line.find('|', 6);
-                        timer_state = sep == std::string::npos ? "idle" : line.substr(6, sep - 6);
-                        if (sep != std::string::npos) timer_value = line.substr(sep + 1);
-                    } else if (line.rfind("STATS|", 0) == 0) {
-                        const std::size_t sep = line.find('|', 6);
-                        if (sep != std::string::npos) {
-                            last_value = line.substr(6, sep - 6);
-                            average_value = line.substr(sep + 1);
-                            bossrun_has_stats = true;
-                        }
-                    } else if (line.rfind("COUNTS|", 0) == 0) {
-                        const std::size_t sep = line.find('|', 7);
-                        if (sep != std::string::npos) {
-                            kills_value = line.substr(7, sep - 7);
-                            wipes_value = line.substr(sep + 1);
-                        }
+                    if (line.rfind("STATS_TEXT|", 0) == 0 || line.rfind("STATS|", 0) == 0) {
+                        bossrun_has_stats = true; break;
                     }
                 }
                 const float default_width = bossrun_window ? 400.0f
@@ -1316,233 +1317,24 @@ DWORD WINAPI overlay_worker(void*) {
                 }
                 fmk::draw_reset_clip();
 
+                fmk::ui::Context ctx{
+                    pos.x, pos.y, pos.w, pos.h,
+                    clicked, click_down, dragging, g_plugins.get(),
+                    cursor_valid, cursor.x, cursor.y,
+                    in_rect, button,
+                    g_bossrun_enabled_texture, g_bossrun_disabled_texture,
+                    g_close_icon_texture, g_resize_icon_texture, title_icon,
+                    g_module_asset_textures
+                };
+
                 if (bossrun_window) {
-                    const bool has_detection = detected_kind != "aucun" && !detected_kind.empty();
-                    const float name_y = pos.y + 40.0f;
-                    fmk::draw_rect(pos.x + 8, name_y, plugin_width - 16, 32,
-                                   {0.66f, 0.68f, 0.69f, 0.96f});
-                    const bool is_boss = detected_is_boss;
-                    const fmk::Color name_color = !has_detection
-                        ? fmk::Color{0.28f,0.30f,0.32f,1.0f}
-                        : (is_boss ? fmk::Color{0.88f,0.16f,0.12f,1.0f}
-                                   : fmk::Color{0.10f,0.55f,0.22f,1.0f});
-                    const float name_w = fmk::measure_text(18.0f, detected_kind.c_str());
-                    const float name_x = has_detection && !is_boss
-                        ? pos.x + (plugin_width - name_w - 36.0f) * 0.5f
-                        : pos.x + (plugin_width - name_w) * 0.5f;
-                    fmk::draw_text(name_x, name_y + 7, 18.0f, name_color,
-                                   detected_kind.c_str());                    if (has_detection && !is_boss) {
-                        const bool tracked = g_plugins->memory().boss_tracking_enabled(detected_kind);
-                        const float group_left = pos.x + (plugin_width - name_w - 36.0f) * 0.5f;
-                        const float toggle_x = group_left + name_w + 8.0f;
-                        const float toggle_y = name_y + 2.0f;
-                        const bool toggle_hot = in_rect(toggle_x, toggle_y, 28.0f, 28.0f);
-                        const int texture = tracked ? g_bossrun_enabled_texture
-                                                    : g_bossrun_disabled_texture;
-                        if (texture >= 1)
-                            fmk::draw_image(texture, toggle_x + 2, toggle_y + 2, 24, 24,
-                                            0, 0, 1, 1, {1,1,1,1});
-                        fmk::draw_rect_outline(toggle_x, toggle_y, 28, 28, 1.0f,
-                                               {0.25f,0.35f,0.38f,1.0f});
-                        if (clicked && dragging.empty() && toggle_hot)
-                            g_plugins->memory().set_boss_tracking_enabled(detected_kind, !tracked);
-                    }
-
-                    const fmk::Color timer_color = timer_state == "running"
-                        ? fmk::Color{1.0f,0.48f,0.10f,1.0f}
-                        : (timer_state == "finished"
-                           ? fmk::Color{1.0f,0.88f,0.20f,1.0f}
-                           : fmk::Color{1.0f,1.0f,1.0f,1.0f});
-                    const float timer_w = fmk::measure_text(38.0f, timer_value.c_str());
-                    fmk::draw_text(pos.x + (plugin_width - timer_w) * 0.5f, pos.y + 82,
-                                   38.0f, timer_color, timer_value.c_str());
-                    float footer_y = pos.y + 140.0f;
-                    if (bossrun_has_stats) {
-                        const std::string stats = "Dernier " + last_value +
-                                                  "    Moyen " + average_value;
-                        const float stats_w = fmk::measure_text(14.0f, stats.c_str());
-                        fmk::draw_text(pos.x + (plugin_width - stats_w) * 0.5f, pos.y + 134,
-                                       14.0f, {0.72f,0.78f,0.82f,1.0f}, stats.c_str());
-                        footer_y = pos.y + 162.0f;
-                    }
-                    const std::string counts = "Victoires " + kills_value +
-                                               "    Echecs " + wipes_value;
-                    const float counts_w = fmk::measure_text(13.0f, counts.c_str());
-                    fmk::draw_text(pos.x + (plugin_width - counts_w) * 0.5f, footer_y,
-                                   13.0f, {0.55f,0.65f,0.70f,1.0f}, counts.c_str());
+                    fmk::ui::render_bossrun(ctx, status, rendered);
                 } else if (map_window) {
-                    std::string map_status = "En attente des donnees du monde...";
-                    std::string map_zoom = "1.00";
-                    for (const auto& line : rendered) {
-                        if (line.rfind("MAP_STATUS|", 0) == 0) {
-                            std::string payload = line.substr(11);
-                            size_t pipe = payload.find('|');
-                            if (pipe != std::string::npos) {
-                                map_status = payload.substr(0, pipe);
-                                map_zoom = payload.substr(pipe + 1);
-                            } else {
-                                map_status = payload;
-                            }
-                        }
-                    }
-                    
-                    const float map_button_w = 38.0f;
-                    const float map_button_h = 38.0f;
-                    const float map_button_y = pos.y + plugin_height - map_button_h - 10.0f;
-                    const float map_gap = 10.0f;
-                    const float map_buttons_x = pos.x + 10.0f;
-                    const bool zoom_out_hot = in_rect(map_buttons_x, map_button_y, map_button_w, map_button_h);
-                    const bool zoom_in_hot = in_rect(map_buttons_x + map_button_w + map_gap,
-                                                     map_button_y, map_button_w, map_button_h);
-                    const bool chest_hot = in_rect(map_buttons_x + 2 * (map_button_w + map_gap),
-                                                   map_button_y, map_button_w, map_button_h);
-                    const bool orb_hot = in_rect(map_buttons_x + 3 * (map_button_w + map_gap),
-                                                 map_button_y, map_button_w, map_button_h);
-
-                    auto map_asset_texture = [&](const char* name) {
-                        const auto module_assets = g_module_asset_textures.find(status.manifest.id);
-                        if (module_assets == g_module_asset_textures.end()) return -1;
-                        const auto it = module_assets->second.find(name);
-                        return it == module_assets->second.end() ? -1 : it->second;
-                    };
-                    const int zoom_out_icon = map_asset_texture("zoom-out.png");
-                    const int zoom_in_icon = map_asset_texture("zoom-in.png");
-                    const int chest_icon = map_asset_texture("chests.png");
-                    const int orb_icon = map_asset_texture("orbs.png");
-                    auto map_button = [&](float x, float w, const char* label, int texture, bool hot) {
-                        if (texture >= 0)
-                            fmk::draw_image(texture, x + 2.0f, map_button_y + 2.0f,
-                                            w - 4.0f, map_button_h - 4.0f, 0, 0, 1, 1,
-                                            hot ? fmk::Color{1.0f,1.0f,0.78f,1.0f}
-                                                : fmk::Color{1,1,1,1});
-                        else
-                            button(x, map_button_y, w, label, hot,
-                                   {0.15f,0.30f,0.46f,1.0f});
-                    };
-                    map_button(map_buttons_x, map_button_w, "-", zoom_out_icon, zoom_out_hot);
-                    map_button(map_buttons_x + map_button_w + map_gap, map_button_w,
-                               "+", zoom_in_icon, zoom_in_hot);
-                    map_button(map_buttons_x + 2 * (map_button_w + map_gap), map_button_w,
-                               "Coffres", chest_icon, chest_hot);
-                    map_button(map_buttons_x + 3 * (map_button_w + map_gap), map_button_w,
-                               "Orbes", orb_icon, orb_hot);
-                    if (clicked && dragging.empty()) {
-                        if (zoom_out_hot) g_plugins->dispatch_event("map_zoom_out");
-                        else if (zoom_in_hot) g_plugins->dispatch_event("map_zoom_in");
-                        else if (chest_hot) g_plugins->dispatch_event("map_chests");
-                        else if (orb_hot) g_plugins->dispatch_event("map_orbs");
-                    }
-                    
-                    // Draw zoom indicator (top right)
-                    std::string zoom_str = "x" + map_zoom;
-                    const float zoom_w = fmk::measure_text(16.0f, zoom_str.c_str());
-                    const float zoom_x = pos.x + plugin_width - zoom_w - 20.0f;
-                    const float zoom_y = pos.y + 44.0f; // Just below title bar
-                    fmk::draw_rect(zoom_x - 6.0f, zoom_y - 2.0f, zoom_w + 12.0f, 24.0f, {0.0f,0.0f,0.0f,0.8f});
-                    fmk::draw_text(zoom_x, zoom_y + 2.0f, 16.0f, {1.0f,1.0f,1.0f,1.0f}, zoom_str.c_str());
-
-                    // The module image is clipped to content, so redraw the
-                    // frame edge and resize grip after it to keep the chrome
-                    // visually above the map.
-                    fmk::draw_rect_outline(pos.x, pos.y, plugin_width, plugin_height,
-                                           1.5f, {0.30f,0.80f,0.70f,1.0f});
-                    fmk::draw_rect(pos.x, pos.y, plugin_width, 34.0f,
-                                   {0.06f,0.12f,0.16f,0.98f});
-                    if (title_icon >= 0)
-                        fmk::draw_image(title_icon, pos.x + 6.0f, pos.y + 4.0f,
-                                        26.0f, 26.0f, 0, 0, 1, 1,
-                                        {1,1,1,1});
-                    
-                    std::string full_title = status.manifest.name;
-                    if (!map_status.empty()) {
-                        full_title += " - " + map_status;
-                    }
-                    fmk::draw_text(pos.x + 40.0f, pos.y + 7.0f, 20.0f,
-                                   {0.95f,0.97f,1.0f,1.0f},
-                                   full_title.c_str());
-                    if (g_close_icon_texture >= 0)
-                        fmk::draw_image(g_close_icon_texture, plugin_close_x,
-                                        plugin_close_y, 22.0f, 22.0f,
-                                        0, 0, 1, 1, {1,1,1,1});
-                    if (g_resize_icon_texture >= 0)
-                        fmk::draw_image(g_resize_icon_texture,
-                                        pos.x + plugin_width - 18.0f,
-                                        pos.y + plugin_height - 18.0f,
-                                        16.0f, 16.0f, 0, 0, 1, 1,
-                                        {1,1,1,1});
+                    fmk::ui::render_map(ctx, status, rendered);
                 } else if (report_window) {
-                    std::string report_status = "En attente d'un personnage...";
-                    for (const auto& line : rendered) {
-                        if (line.rfind("REPORT_STATUS|", 0) == 0)
-                            report_status = line.substr(14);
-                    }
-                    fmk::draw_text(pos.x + 14.0f, pos.y + 44.0f, 16.0f,
-                                   {0.68f,0.80f,0.74f,1.0f}, report_status.c_str());
-                    const float save_x = pos.x + 14.0f;
-                    const float save_y = pos.y + 76.0f;
-                    const float save_w = 200.0f;
-                    const bool save_hot = in_rect(save_x, save_y, save_w, 30.0f);
-                    button(save_x, save_y, save_w, "Sauvegarder maintenant", save_hot,
-                           {0.16f,0.42f,0.30f,1.0f});
-                    const float link_x = save_x + save_w + 12.0f;
-                    const float link_w = plugin_width - (link_x - pos.x) - 14.0f;
-                    const bool link_hot = in_rect(link_x, save_y, link_w, 30.0f);
-                    button(link_x, save_y, link_w, "Ouvrir le rapport", link_hot,
-                           {0.15f,0.30f,0.46f,1.0f});
-                    if (clicked && dragging.empty() && save_hot)
-                        g_plugins->memory().request_report_export();
-                    if (clicked && dragging.empty() && link_hot)
-                        fmk::report_open();
-
-                    const unsigned long saved_tick = fmk::report_last_saved_tick();
-                    std::string saved = "Derniere sauvegarde : aucune cette session";
-                    if (saved_tick) {
-                        const unsigned long seconds = (GetTickCount() - saved_tick) / 1000;
-                        saved = seconds < 2 ? "Derniere sauvegarde : a l'instant"
-                            : "Derniere sauvegarde : il y a " + std::to_string(seconds) + " s";
-                    }
-                    fmk::draw_text(pos.x + 14.0f, pos.y + 118.0f, 14.0f,
-                                   {0.55f,0.65f,0.70f,1.0f}, saved.c_str());                } else if (console_window) {
-                    const std::size_t visible_lines = (std::size_t)std::max(
-                        1.0f, std::floor((plugin_height - 73.0f) / 21.0f));
-                    static std::size_t console_back = 0;
-                    static std::size_t console_last_count = 0;
-                    if (rendered.size() != console_last_count && console_back == 0)
-                        console_last_count = rendered.size();
-                    const int wheel = fmk::input_take_wheel_in((int)pos.x, (int)(pos.y + 34),
-                                                               (int)plugin_width,
-                                                               (int)(plugin_height - 34));
-                    fmk::input_set_wheel_rect((int)pos.x, (int)(pos.y + 34),
-                                              (int)plugin_width,
-                                              (int)(plugin_height - 34));
-                    const std::size_t max_back = rendered.size() > visible_lines
-                        ? rendered.size() - visible_lines : 0;
-                    if (wheel > 0) console_back = std::min(max_back, console_back + (std::size_t)wheel);
-                    if (wheel < 0) {
-                        const std::size_t down = (std::size_t)(-wheel);
-                        console_back = down >= console_back ? 0 : console_back - down;
-                    }
-                    console_back = std::min(console_back, max_back);
-                    const std::size_t end_line = rendered.size() - console_back;
-                    const std::size_t first_line = end_line > visible_lines
-                        ? end_line - visible_lines : 0;
-                    fmk::draw_rect(pos.x + 8, pos.y + 40, plugin_width - 16,
-                                   plugin_height - 50,
-                                   {0.015f,0.025f,0.032f,0.98f});
-                    float line_y = pos.y + 48.0f;
-                    for (std::size_t i = first_line; i < end_line; ++i) {
-                        const std::string line = rendered[i].rfind("LOG|", 0) == 0
-                            ? rendered[i].substr(4) : rendered[i];
-                        fmk::draw_text(pos.x + 16, line_y, 15.0f,
-                                       {0.62f,0.88f,0.72f,1.0f}, line.c_str());
-                        line_y += 21.0f;
-                    }
-                    const std::string scroll_info = std::to_string(first_line + (rendered.empty()?0:1)) +
-                        "-" + std::to_string(end_line) + " / " + std::to_string(rendered.size());
-                    const float scroll_w = fmk::measure_text(13.0f, scroll_info.c_str());
-                    const float scroll_x = plugin_close_x - 10.0f - scroll_w;
-                    fmk::draw_text(scroll_x, pos.y + 10, 13.0f,
-                                   {0.68f,0.76f,0.82f,1.0f}, scroll_info.c_str());
+                    fmk::ui::render_report(ctx, status, rendered);
+                } else if (console_window) {
+                    fmk::ui::render_console(ctx, status, rendered);
                 } else {
                     float text_y = pos.y + 42.0f;
                     for (const auto& line : rendered) {

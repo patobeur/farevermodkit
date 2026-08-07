@@ -316,17 +316,16 @@ std::string json_escape(const std::string& value) {
     return out;
 }
 
-bool bossrun_profile(GameMemory* memory, const std::string& kind,
+bool bossrun_profile(GameMemory* memory,
                      Inventories* identity, std::filesystem::path* path) {
-    if (!memory || kind.empty() || !identity || !path ||
+    if (!memory || !identity || !path ||
         !memory->read_inventories(identity)) return false;
     wchar_t local[MAX_PATH];
     const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH);
     if (!n || n >= MAX_PATH) return false;
     *path = std::filesystem::path(local) / L"farevermodkit" / L"data" / L"accounts" /
             safe_storage_component(identity->steam_account_id) / L"characters" /
-            safe_storage_component(identity->character_uuid) / L"bossrun" /
-            (safe_storage_component(kind) + ".json");
+            safe_storage_component(identity->character_uuid) / L"bossrun.json";
     return true;
 }
 
@@ -342,25 +341,21 @@ long long json_integer(const std::string& text, const char* key) {
 }
 
 int farever_bossrun_load(lua_State* state) {
-    const char* raw_kind = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
-    if (!raw_kind || !*raw_kind || !g_runtime || !g_create_table) {
+    if (!g_runtime) {
         if (g_push_nil) g_push_nil(state); return 1;
     }
     Inventories identity;
     std::filesystem::path path;
-    if (!bossrun_profile(g_runtime->memory_context(), raw_kind, &identity, &path)) {
+    if (!bossrun_profile(g_runtime->memory_context(), &identity, &path)) {
         if (g_push_nil) g_push_nil(state); return 1;
     }
     std::ifstream input(path, std::ios::binary);
-    if (!input) { if (g_push_nil) g_push_nil(state); return 1; }
-    std::ostringstream buffer; buffer << input.rdbuf();
-    const std::string json = buffer.str();
-    g_create_table(state, 0, 6);
-    set_integer_field(state, "lastMs", json_integer(json, "lastMs"));
-    set_integer_field(state, "bestMs", json_integer(json, "bestMs"));
-    set_integer_field(state, "totalMs", json_integer(json, "totalMs"));
-    set_integer_field(state, "kills", json_integer(json, "kills"));
-    set_integer_field(state, "wipes", json_integer(json, "wipes"));
+    std::string json = "[]";
+    if (input) {
+        std::ostringstream buffer; buffer << input.rdbuf();
+        json = buffer.str();
+    }
+    if (g_push_string) g_push_string(state, json.c_str());
     return 1;
 }
 
@@ -421,40 +416,29 @@ int farever_report_generate(lua_State* state) {
 }
 
 int farever_bossrun_save(lua_State* state) {
-    const char* raw_kind = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
-    const char* raw_class = g_to_string ? g_to_string(state, 2, nullptr) : nullptr;
-    if (!raw_kind || !*raw_kind || !g_runtime) return 0;
-    const long long last_ms = lua_integer_arg(state, 3);
-    const long long best_ms = lua_integer_arg(state, 4);
-    const long long total_ms = lua_integer_arg(state, 5);
-    const long long kills = lua_integer_arg(state, 6);
-    const long long wipes = lua_integer_arg(state, 7);
+    const char* history_json = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
+    if (!history_json || !g_runtime) return 0;
     Inventories identity;
     std::filesystem::path path;
-    if (!bossrun_profile(g_runtime->memory_context(), raw_kind, &identity, &path)) return 0;
+    if (!bossrun_profile(g_runtime->memory_context(), &identity, &path)) return 0;
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) return 0;
-    const auto updated = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    std::ostringstream json;
-    json << "{\n"
-         << "  \"accountId\": \"" << json_escape(identity.steam_account_id) << "\",\n"
-         << "  \"characterUuid\": \"" << json_escape(identity.character_uuid) << "\",\n"
-         << "  \"characterName\": \"" << json_escape(identity.character) << "\",\n"
-         << "  \"bossKind\": \"" << json_escape(raw_kind) << "\",\n"
-         << "  \"runtimeClass\": \"" << json_escape(raw_class ? raw_class : "") << "\",\n"
-         << "  \"lastMs\": " << last_ms << ",\n"
-         << "  \"bestMs\": " << best_ms << ",\n"
-         << "  \"totalMs\": " << total_ms << ",\n"
-         << "  \"kills\": " << kills << ",\n"
-         << "  \"wipes\": " << wipes << ",\n"
-         << "  \"updatedAtUnixMs\": " << updated << "\n}\n";
     const auto temporary = path.wstring() + L".tmp";
     { std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-      if (!output) return 0; output << json.str(); }
+      if (!output) return 0; output << history_json; }
     MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
     return 0;
+}
+
+int farever_date_string(lua_State* state) {
+    auto t = std::time(nullptr);
+    auto tm = *std::localtime(&t);
+    char buf[64];
+    std::strftime(buf, sizeof(buf), "%d/%m %H:%M", &tm);
+    if (g_push_string) g_push_string(state, buf);
+    if (g_push_integer) g_push_integer(state, (long long)t);
+    return 2;
 }
 int farever_inventory_summary(lua_State* state) {
     if (!g_create_table || !g_runtime) return 0;
@@ -585,6 +569,8 @@ bool LuaRuntime::install_sandbox() {
     set_field((lua_State*)state_, -2, "bossrun_load");
     push_cclosure((lua_State*)state_, &farever_bossrun_save, 0);
     set_field((lua_State*)state_, -2, "bossrun_save");
+    push_cclosure((lua_State*)state_, &farever_date_string, 0);
+    set_field((lua_State*)state_, -2, "date_string");
     push_cclosure((lua_State*)state_, &farever_map_data, 0);
     set_field((lua_State*)state_, -2, "map_data");
     push_cclosure((lua_State*)state_, &farever_report_generate, 0);

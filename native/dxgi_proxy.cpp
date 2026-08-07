@@ -1414,7 +1414,20 @@ DWORD WINAPI overlay_worker(void*) {
                      g_close_icon_texture, 34.0f,
                      {0.04f,0.07f,0.09f,0.94f}, {0.10f,0.18f,0.23f,0.98f},
                      {0.30f,0.80f,0.70f,1.0f}, true, g_resize_icon_texture},
-                    {cursor_valid, (float)cursor.x, (float)cursor.y, clicked});            }
+                    {cursor_valid, (float)cursor.x, (float)cursor.y, clicked});
+                    
+                fmk::ui::Context history_ctx{
+                    bossrun_history_window.x, bossrun_history_window.y,
+                    bossrun_history_window.w, bossrun_history_window.h,
+                    clicked, click_down, dragging, g_plugins.get(),
+                    cursor_valid, cursor.x, cursor.y,
+                    in_rect, button,
+                    g_bossrun_enabled_texture, g_bossrun_disabled_texture,
+                    g_close_icon_texture, g_resize_icon_texture, history_icon,
+                    g_module_asset_textures
+                };
+                fmk::ui::render_bossrun_history(history_ctx, g_plugins->rendered_text("patobeur.bossrun"));
+            }
 
             (void)window_index;
             if (!icon_tooltip.empty() && cursor_valid && dragging.empty()) {

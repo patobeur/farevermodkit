@@ -87,28 +87,6 @@ void render_map(Context& ctx, const fmk::PluginStatus& status, const std::vector
     // visually above the map.
     fmk::draw_rect_outline(ctx.x, ctx.y, ctx.w, ctx.h,
                            1.5f, {0.30f,0.80f,0.70f,1.0f});
-    fmk::draw_rect(ctx.x, ctx.y, ctx.w, 34.0f,
-                   {0.06f,0.12f,0.16f,0.98f});
-                   
-    if (ctx.title_icon >= 0)
-        fmk::draw_image(ctx.title_icon, ctx.x + 6.0f, ctx.y + 4.0f,
-                        26.0f, 26.0f, 0, 0, 1, 1,
-                        {1,1,1,1});
-    
-    std::string full_title = status.manifest.name;
-    if (!map_status.empty()) {
-        full_title += " - " + map_status;
-    }
-    fmk::draw_text(ctx.x + 40.0f, ctx.y + 7.0f, 20.0f,
-                   {0.95f,0.97f,1.0f,1.0f},
-                   full_title.c_str());
-                   
-    const float plugin_close_x = ctx.x + ctx.w - 30.0f;
-    const float plugin_close_y = ctx.y + 6.0f;
-    if (ctx.close_tex >= 0)
-        fmk::draw_image(ctx.close_tex, plugin_close_x,
-                        plugin_close_y, 22.0f, 22.0f,
-                        0, 0, 1, 1, {1,1,1,1});
     if (ctx.resize_tex >= 0)
         fmk::draw_image(ctx.resize_tex,
                         ctx.x + ctx.w - 18.0f,

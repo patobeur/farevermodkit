@@ -1,5 +1,7 @@
 # FareverModKit
 
+![FareverModKit Screenshot](docs/images/farevermodkit_screener_1024.jpg)
+
 FareverModKit (FMK) est un socle de mods Lua pour **Farever** sous Windows. Son cœur natif fournit l’overlay DirectX 12, une lecture mémoire centralisée et validée par version du jeu, ainsi qu’un hôte Lua isolant les modules les uns des autres.
 
 > Projet communautaire non officiel, sans affiliation avec les développeurs de Farever ou Valve.

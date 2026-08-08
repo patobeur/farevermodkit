@@ -161,6 +161,7 @@ void render_bossrun_history(Context& ctx, const std::vector<std::string>& render
     }
                    
     if (!history.empty()) {
+        fmk::draw_set_clip(ctx.x, ctx.y + 34.0f, ctx.w, std::max(0.0f, ctx.h - 34.0f));
         float list_y = ctx.y + 42.0f;
         
         long long max_ms = 1;
@@ -202,6 +203,7 @@ void render_bossrun_history(Context& ctx, const std::vector<std::string>& render
             const fmk::Color fill_col = e.is_best ? fmk::Color{0.7f, 0.6f, 0.1f, 1.0f} : fmk::Color{0.3f, 0.4f, 0.5f, 1.0f};
             fmk::draw_rect(item_x, item_y + 16.0f, fill_w, 3.0f, fill_col);
         }
+        fmk::draw_reset_clip();
     }
 }
 

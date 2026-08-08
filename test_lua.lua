@@ -1,0 +1,1 @@
+local s = [{"boss":"MunsterChuck","class":"ent","ms":325204,"date":"07/08","unix":162}]; for b, c, m, d, u in string.gmatch(s, {boss%s*:%s*([^]+)%s*,%s*class%s*:%s*([^]*)%s*,%s*ms%s*:%s*(%d+)%s*,%s*date%s*:%s*([^]+)%s*,%s*unix%s*:%s*(%d+)}) do print(b, c, m, d, u) end

@@ -1,1 +1,16 @@
-{"status":"Rapport HTML local par compte et personnage."}
+{
+  "status": "Rapport HTML local par compte et personnage.",
+  "btn_wait_char": "En attente d'un personnage...",
+  "btn_wait_data": "En attente des donnees du personnage...",
+  "btn_export_req": "Export demande pour",
+  "btn_export_unav": "Export indisponible",
+  "btn_save": "Sauvegarder maintenant",
+  "btn_open": "Ouvrir le rapport",
+  "btn_last_none": "Derniere sauvegarde : aucune cette session",
+  "btn_last_now": "Derniere sauvegarde : a l'instant",
+  "btn_last_ago": "Derniere sauvegarde : il y a ",
+  "btn_sec": " s",
+  "settings_desc": "Le rapport est actualise automatiquement pour chaque personnage detecte.",
+  "btn_mod_dir": "Dossier Mod (FMK)",
+  "btn_data_dir": "Dossier Donnees"
+}

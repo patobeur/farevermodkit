@@ -1,1 +1,16 @@
-{"status":"Local HTML report by account and character."}
+{
+  "status": "Local HTML report by account and character.",
+  "btn_wait_char": "Waiting for a character...",
+  "btn_wait_data": "Waiting for character data...",
+  "btn_export_req": "Export requested for",
+  "btn_export_unav": "Export unavailable",
+  "btn_save": "Save now",
+  "btn_open": "Open report",
+  "btn_last_none": "Last save: none this session",
+  "btn_last_now": "Last save: just now",
+  "btn_last_ago": "Last save: ",
+  "btn_sec": "s ago",
+  "settings_desc": "The report is automatically updated for each detected character.",
+  "btn_mod_dir": "Mod Folder (FMK)",
+  "btn_data_dir": "Data Folder"
+}

@@ -1,0 +1,24 @@
+import os
+
+def add_buttons(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        text = f.read()
+
+    target = '<input id="search" type="search" placeholder="Rechercher..." hidden>'
+    
+    btn_style = "display:inline-block; padding: 6px 14px; background: #24292f; color: #ffffff !important; border-radius: 20px; text-decoration: none; font-size: 0.9em; box-shadow: 0 2px 5px rgba(0,0,0,0.2); transition: transform 0.2s ease;"
+    
+    buttons_html = f'''<div style="display:flex; gap:10px; align-items:center; margin-left:auto;">
+    <a href="../../../../" target="_blank" style="{btn_style}" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">📁 Dossier Mod (FMK)</a>
+    <a href="../" target="_blank" style="{btn_style}" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">📁 Dossier Donn&eacute;es (Report)</a>
+</div>'''
+
+    if target in text and 'Dossier Mod (FMK)' not in text:
+        text = text.replace(target, target + buttons_html)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        print("Buttons added!")
+    else:
+        print("Target not found or already added.")
+
+add_buttons(r'd:\farever-mods\farevermodkit\modules\Patobeur\Report\html\farever-report.html')

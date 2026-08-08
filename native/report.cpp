@@ -49,6 +49,9 @@ bool report_install_assets(){
  return !ec;
 }
 void report_open(){ auto p=std::filesystem::path(user_data_dir())/L"html"/L"farever-report.html"; ShellExecuteW(nullptr,L"open",p.c_str(),nullptr,nullptr,SW_SHOWNORMAL); }
+void report_open_data_folder() { auto p=std::filesystem::path(user_data_dir())/L"html"; ShellExecuteW(nullptr,L"explore",p.c_str(),nullptr,nullptr,SW_SHOWNORMAL); }
+void report_open_mod_folder() { auto p=std::filesystem::path(game_dir())/L"farevermodkit"; ShellExecuteW(nullptr,L"explore",p.c_str(),nullptr,nullptr,SW_SHOWNORMAL); }
+
 unsigned long report_last_saved_tick() {
     return static_cast<unsigned long>(InterlockedCompareExchange(&g_last_saved_tick, 0, 0));
 }

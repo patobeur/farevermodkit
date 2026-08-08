@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include "lua_runtime.h"
+#include "memory/memory_log.h"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -440,6 +441,15 @@ int farever_date_string(lua_State* state) {
     if (g_push_integer) g_push_integer(state, (long long)t);
     return 2;
 }
+
+int farever_log(lua_State* state) {
+    const char* message = g_to_string ? g_to_string(state, 1, nullptr) : nullptr;
+    if (message) {
+        memory_log("[LUA] %s", message);
+    }
+    return 0;
+}
+
 int farever_inventory_summary(lua_State* state) {
     if (!g_create_table || !g_runtime) return 0;
     auto* memory = g_runtime->memory_context();
@@ -573,6 +583,8 @@ bool LuaRuntime::install_sandbox() {
     set_field((lua_State*)state_, -2, "date_string");
     push_cclosure((lua_State*)state_, &farever_map_data, 0);
     set_field((lua_State*)state_, -2, "map_data");
+    push_cclosure((lua_State*)state_, &farever_log, 0);
+    set_field((lua_State*)state_, -2, "log");
     push_cclosure((lua_State*)state_, &farever_report_generate, 0);
     set_field((lua_State*)state_, -2, "report_generate");
     set_global((lua_State*)state_, "farever");

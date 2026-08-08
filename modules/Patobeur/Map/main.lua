@@ -11,6 +11,8 @@ local function map_asset(world)
     return nil
 end
 
+local last_logged_world = nil
+
 function on_render()
     local data = farever.map_data()
     if not data or not data.player then
@@ -22,9 +24,15 @@ function on_render()
 
     local asset = map_asset(data.world)
     if not asset then
+        if last_logged_world ~= data.world then
+            farever.log("Carte: Monde non pris en charge detecte -> " .. tostring(data.world))
+            last_logged_world = data.world
+        end
         imgui.text("MAP_STATUS|Monde non pris en charge: " .. tostring(data.world))
         return
     end
+    
+    last_logged_world = nil
     
     local px = data.player.x
     local py = data.player.y

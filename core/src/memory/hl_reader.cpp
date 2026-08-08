@@ -782,15 +782,15 @@ void read_item_array(void* array_obj, const char* source,
                 // Elements are HVIRTUAL (kind 15): Haxe structural values, not
                 // class instances. Enumerate the field table so the shape is
                 // named rather than guessed at.
-                std::vector<VirtualField> vf;
-                if (read_virtual_fields(e, &vf)) {
+                std::vector<VirtualField> vf_diag;
+                if (read_virtual_fields(e, &vf_diag)) {
                     std::string desc;
-                    for (size_t k = 0; k < vf.size() && k < 10; k++) {
+                    for (size_t k = 0; k < vf_diag.size() && k < 10; k++) {
                         if (!desc.empty()) desc += ", ";
-                        desc += vf[k].name + ":k" + std::to_string(vf[k].kind);
+                        desc += vf_diag[k].name + ":k" + std::to_string(vf_diag[k].kind);
                         // Name whatever an object-typed field points at.
-                        if (vf[k].kind == hlrt::HOBJ && vf[k].value_ptr) {
-                            void* v = read_ptr(vf[k].value_ptr, 0);
+                        if (vf_diag[k].kind == hlrt::HOBJ && vf_diag[k].value_ptr) {
+                            void* v = read_ptr(vf_diag[k].value_ptr, 0);
                             std::string c = obj_class_name(v);
                             if (!c.empty()) desc += "=" + c;
                         }
@@ -914,7 +914,6 @@ bool reader_read_inventories(Inventories* out) {
     // need.
     std::string kind = read_hx_string(read_ptr(hero, off::ent_Unit::kind));
     if (kind.empty()) {
-        void* hero_data = read_ptr(player, off::st_Player::heroData);
         // A null check rather than an exact class-name test, for the same
         // reason the loadout walk below uses one: a subclass would fail the
         // name comparison and silently skip the read.

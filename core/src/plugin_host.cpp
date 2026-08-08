@@ -1,5 +1,6 @@
 #include "plugin_host.h"
 
+#include <filesystem>
 #include <unordered_set>
 #include "memory/memory_log.h"
 
@@ -71,6 +72,11 @@ bool PluginHost::load_all(const std::filesystem::path& lua_dll,
             entries_.push_back(std::move(entry));
             continue;
         }
+        
+        if (std::filesystem::is_regular_file(language)) {
+            fmk::memory_log("[FMK] Language loaded for %s: %s", manifest.id.c_str(), locale.c_str());
+        }
+
         const auto script = manifest.directory / std::filesystem::path(manifest.entry);
         if (!entry.runtime->execute_file(script)) {
             entry.status.error = entry.runtime->last_error();

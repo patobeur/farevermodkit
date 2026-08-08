@@ -1,1 +1,16 @@
-{"status":"Informe HTML local por cuenta y personaje."}
+{
+  "status": "Reporte HTML local por cuenta y personaje.",
+  "btn_wait_char": "Esperando un personaje...",
+  "btn_wait_data": "Esperando datos del personaje...",
+  "btn_export_req": "Exportacion solicitada para",
+  "btn_export_unav": "Exportacion no disponible",
+  "btn_save": "Guardar ahora",
+  "btn_open": "Abrir reporte",
+  "btn_last_none": "Ultima guardia: ninguna esta sesion",
+  "btn_last_now": "Ultima guardia: hace un instante",
+  "btn_last_ago": "Ultima guardia: hace ",
+  "btn_sec": " s",
+  "settings_desc": "El reporte se actualiza automaticamente para cada personaje detectado.",
+  "btn_mod_dir": "Carpeta Mod (FMK)",
+  "btn_data_dir": "Carpeta Datos"
+}

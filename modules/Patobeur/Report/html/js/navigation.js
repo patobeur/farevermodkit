@@ -24,6 +24,7 @@
     const groups = characterGroups();
     return [
       { label: 'Accueil', href: 'index.html' },
+      { label: 'Mod', href: 'mod.html' },
       { label: 'Personnages', children: groups.map(([account, characters]) => ({
         label: account,
         children: [...characters].sort((a, b) => a[1].localeCompare(b[1], 'fr'))
